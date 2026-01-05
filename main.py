@@ -8,6 +8,7 @@ import time
 import libvirt
 import os
 import shutil
+import atexit
 
 app = FastAPI()
 
@@ -24,6 +25,50 @@ def load_config(path="config.yaml"):
         return yaml.safe_load(f)
 
 config = load_config()
+
+tunnel_process = None
+
+def start_main_tunnel():
+    global tunnel_process
+    jump = config["jump_host"]
+    vm_host = config["vms"][0]
+    LOCAL_PORT = config.get("local_tunnel_port", 14444)
+    REMOTE_LIBVIRT_PORT = vm_host.get("port", 16509)
+    
+    for proc in psutil.process_iter(attrs=['cmdline']):
+        if proc.info['cmdline'] is None:
+            continue
+        cmd = ' '.join(proc.info['cmdline'])
+        if f"-L {LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd:
+            return
+    
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-N", "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
+        f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+    ]
+    tunnel_process = subprocess.Popen(cmd)
+    time.sleep(2)
+
+def stop_main_tunnel():
+    global tunnel_process
+    if tunnel_process:
+        tunnel_process.terminate()
+        try:
+            tunnel_process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            tunnel_process.kill()
+
+@app.on_event("startup")
+async def startup_event():
+    start_main_tunnel()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    stop_main_tunnel()
+
+atexit.register(stop_main_tunnel)
 
 @app.get("/vms/list")
 def list_vm_hosts():
