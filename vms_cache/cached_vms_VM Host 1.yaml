@@ -1,0 +1,19 @@
+vms:
+- id: -1
+  name: win-10-clone
+  state: shutoff
+- id: -1
+  name: win-10
+  state: shutoff
+- id: -1
+  name: lin2404
+  state: shutoff
+- id: -1
+  name: win-10-test
+  state: shutoff
+- id: -1
+  name: --win10
+  state: shutoff
+- id: -1
+  name: vm1
+  state: shutoff
