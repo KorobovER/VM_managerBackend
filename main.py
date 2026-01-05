@@ -131,6 +131,8 @@ def start_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = host.get("port", 16509)
 
+    logger.info(f"Starting VM: {vm_name} on host: {vm_host}")
+
     def tunnel_exists():
         for proc in psutil.process_iter(attrs=['cmdline']):
             cmd = ' '.join(proc.info['cmdline'])
@@ -139,26 +141,40 @@ def start_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
         return False
 
     if not tunnel_exists():
+        logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
         cmd = [
             "ssh",
             "-o", "StrictHostKeyChecking=no",
             "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
             f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
         ]
-        subprocess.Popen(cmd)
-        time.sleep(2)
+        logger.info(f"SSH command: {' '.join(cmd)}")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        logger.info(f"SSH process started with PID: {proc.pid}")
+        time.sleep(3)
+        if proc.poll() is not None:
+            _, stderr = proc.communicate()
+            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+    else:
+        logger.info("Tunnel already exists")
 
     try:
+        logger.info(f"Attempting to connect to libvirt on 127.0.0.1:{LOCAL_PORT}")
         conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
         if conn is None:
+            logger.error("libvirt connection returned None")
             raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
         domain = conn.lookupByName(vm_name)
         if domain is None:
+            logger.error(f"VM {vm_name} not found")
             raise HTTPException(status_code=404, detail="ВМ не найдена.")
         domain.create()
         status = "started"
         conn.close()
+        logger.info(f"VM {vm_name} started successfully")
     except Exception as e:
+        logger.error(f"Libvirt error: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
 
     log = {"vm": vm_name, "action": "start", "status": status, "host": vm_host}
@@ -174,6 +190,8 @@ def stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = host.get("port", 16509)
 
+    logger.info(f"Stopping VM: {vm_name} on host: {vm_host}")
+
     def tunnel_exists():
         for proc in psutil.process_iter(attrs=['cmdline']):
             cmd = ' '.join(proc.info['cmdline'])
@@ -182,26 +200,40 @@ def stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
         return False
 
     if not tunnel_exists():
+        logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
         cmd = [
             "ssh",
             "-o", "StrictHostKeyChecking=no",
             "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
             f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
         ]
-        subprocess.Popen(cmd)
-        time.sleep(2)
+        logger.info(f"SSH command: {' '.join(cmd)}")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        logger.info(f"SSH process started with PID: {proc.pid}")
+        time.sleep(3)
+        if proc.poll() is not None:
+            _, stderr = proc.communicate()
+            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+    else:
+        logger.info("Tunnel already exists")
 
     try:
+        logger.info(f"Attempting to connect to libvirt on 127.0.0.1:{LOCAL_PORT}")
         conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
         if conn is None:
+            logger.error("libvirt connection returned None")
             raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
         domain = conn.lookupByName(vm_name)
         if domain is None:
+            logger.error(f"VM {vm_name} not found")
             raise HTTPException(status_code=404, detail="ВМ не найдена.")
         domain.shutdown()
         status = "stopped"
         conn.close()
+        logger.info(f"VM {vm_name} stopped successfully")
     except Exception as e:
+        logger.error(f"Libvirt error: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
 
     log = {"vm": vm_name, "action": "stop", "status": status, "host": vm_host}
@@ -217,7 +249,36 @@ def get_running_vms(vm: str = Query(..., description="VM name")):
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = vm_host.get("port", 16509)
 
+    logger.info(f"Getting running VMs from host: {vm}")
+
+    def tunnel_exists():
+        for proc in psutil.process_iter(attrs=['cmdline']):
+            cmd = ' '.join(proc.info['cmdline'])
+            if f"-L {LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd and jump['user'] in cmd:
+                return True
+        return False
+
+    if not tunnel_exists():
+        logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
+        cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
+            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
+        ]
+        logger.info(f"SSH command: {' '.join(cmd)}")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        logger.info(f"SSH process started with PID: {proc.pid}")
+        time.sleep(3)
+        if proc.poll() is not None:
+            _, stderr = proc.communicate()
+            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+    else:
+        logger.info("Tunnel already exists")
+
     try:
+        logger.info(f"Attempting to connect to libvirt on 127.0.0.1:{LOCAL_PORT}")
         conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
         ids = conn.listDomainsID()
         running = []
@@ -225,13 +286,14 @@ def get_running_vms(vm: str = Query(..., description="VM name")):
             dom = conn.lookupByID(id)
             running.append(dom.name())
         conn.close()
+        logger.info(f"Found {len(running)} running VMs")
         return {"running_vms": running}
     except Exception as e:
+        logger.error(f"Libvirt error: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/vms/force_stop")
 def force_stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
-    import time as time_mod
     jump = config["jump_host"]
     vm_hosts = {v["name"]: v for v in config["vms"]}
     if vm_host not in vm_hosts:
@@ -239,6 +301,8 @@ def force_stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
     host = vm_hosts[vm_host]
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = host.get("port", 16509)
+
+    logger.info(f"Force stopping VM: {vm_name} on host: {vm_host}")
 
     def tunnel_exists():
         for proc in psutil.process_iter(attrs=['cmdline']):
@@ -248,24 +312,38 @@ def force_stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
         return False
 
     if not tunnel_exists():
+        logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
         cmd = [
             "ssh",
             "-o", "StrictHostKeyChecking=no",
             "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
             f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
         ]
-        subprocess.Popen(cmd)
-        time_mod.sleep(2)
+        logger.info(f"SSH command: {' '.join(cmd)}")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        logger.info(f"SSH process started with PID: {proc.pid}")
+        time.sleep(3)
+        if proc.poll() is not None:
+            _, stderr = proc.communicate()
+            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+    else:
+        logger.info("Tunnel already exists")
 
     try:
+        logger.info(f"Attempting to connect to libvirt on 127.0.0.1:{LOCAL_PORT}")
         conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
         if conn is None:
+            logger.error("libvirt connection returned None")
             raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
         domain = conn.lookupByName(vm_name)
         if domain is None:
+            logger.error(f"VM {vm_name} not found")
             raise HTTPException(status_code=404, detail="ВМ не найдена.")
         domain.destroy()
         conn.close()
+        logger.info(f"VM {vm_name} force stopped successfully")
         return {"vm": vm_name, "action": "force_stop", "status": "forced_off", "host": vm_host}
     except Exception as e:
+        logger.error(f"Libvirt error: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
