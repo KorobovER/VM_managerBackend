@@ -2,7 +2,6 @@ jump_host:
   host: 212.192.123.3
   port: 3003
   user: gate
-  password: ""
 local_tunnel_port: 14444
 vms:
 - host: 172.20.0.198
