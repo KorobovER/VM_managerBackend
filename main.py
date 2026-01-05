@@ -26,6 +26,46 @@ def load_config(path="config.yaml"):
     with open(path, 'r') as f:
         return yaml.safe_load(f)
 
+def create_tunnel_with_password(jump_host, local_port, remote_host, remote_port):
+    """Создаёт SSH туннель с использованием пароля через sshpass"""
+    password = jump_host.get('password', '')
+    
+    if password:
+        cmd = [
+            "sshpass",
+            "-p", password,
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-L", f"{local_port}:{remote_host}:{remote_port}",
+            f"{jump_host['user']}@{jump_host['host']}",
+            "-p", str(jump_host['port']),
+            "-N"
+        ]
+    else:
+        cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-L", f"{local_port}:{remote_host}:{remote_port}",
+            f"{jump_host['user']}@{jump_host['host']}",
+            "-p", str(jump_host['port']),
+            "-N"
+        ]
+    
+    logger.info(f"Creating SSH tunnel with command: {' '.join(cmd[:3] + cmd[-7:])}")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    logger.info(f"SSH process started with PID: {proc.pid}")
+    time.sleep(3)
+    
+    if proc.poll() is not None:
+        _, stderr = proc.communicate()
+        error_msg = stderr.decode()
+        logger.error(f"SSH tunnel failed immediately: {error_msg}")
+        raise Exception(f"SSH tunnel failed: {error_msg}")
+    
+    return proc
+
 config = load_config()
 
 @app.get("/vms/list")
@@ -54,20 +94,11 @@ def get_vms(vm: str = Query(..., description="VM name")):
 
     if not tunnel_exists():
         logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-        ]
-        logger.info(f"SSH command: {' '.join(cmd)}")
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        logger.info(f"SSH process started with PID: {proc.pid}")
-        time.sleep(3)
-        if proc.poll() is not None:
-            _, stderr = proc.communicate()
-            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
-            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+        try:
+            create_tunnel_with_password(jump, LOCAL_PORT, vm_host['host'], REMOTE_LIBVIRT_PORT)
+        except Exception as e:
+            logger.error(f"Failed to create SSH tunnel: {e}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel error: {e}")
     else:
         logger.info("Tunnel already exists")
 
@@ -142,20 +173,11 @@ def start_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
 
     if not tunnel_exists():
         logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-        ]
-        logger.info(f"SSH command: {' '.join(cmd)}")
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        logger.info(f"SSH process started with PID: {proc.pid}")
-        time.sleep(3)
-        if proc.poll() is not None:
-            _, stderr = proc.communicate()
-            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
-            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+        try:
+            create_tunnel_with_password(jump, LOCAL_PORT, host['host'], REMOTE_LIBVIRT_PORT)
+        except Exception as e:
+            logger.error(f"Failed to create SSH tunnel: {e}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel error: {e}")
     else:
         logger.info("Tunnel already exists")
 
@@ -201,20 +223,11 @@ def stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
 
     if not tunnel_exists():
         logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-        ]
-        logger.info(f"SSH command: {' '.join(cmd)}")
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        logger.info(f"SSH process started with PID: {proc.pid}")
-        time.sleep(3)
-        if proc.poll() is not None:
-            _, stderr = proc.communicate()
-            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
-            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+        try:
+            create_tunnel_with_password(jump, LOCAL_PORT, host['host'], REMOTE_LIBVIRT_PORT)
+        except Exception as e:
+            logger.error(f"Failed to create SSH tunnel: {e}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel error: {e}")
     else:
         logger.info("Tunnel already exists")
 
@@ -260,20 +273,11 @@ def get_running_vms(vm: str = Query(..., description="VM name")):
 
     if not tunnel_exists():
         logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-        ]
-        logger.info(f"SSH command: {' '.join(cmd)}")
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        logger.info(f"SSH process started with PID: {proc.pid}")
-        time.sleep(3)
-        if proc.poll() is not None:
-            _, stderr = proc.communicate()
-            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
-            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+        try:
+            create_tunnel_with_password(jump, LOCAL_PORT, vm_host['host'], REMOTE_LIBVIRT_PORT)
+        except Exception as e:
+            logger.error(f"Failed to create SSH tunnel: {e}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel error: {e}")
     else:
         logger.info("Tunnel already exists")
 
@@ -313,20 +317,11 @@ def force_stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
 
     if not tunnel_exists():
         logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-        ]
-        logger.info(f"SSH command: {' '.join(cmd)}")
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        logger.info(f"SSH process started with PID: {proc.pid}")
-        time.sleep(3)
-        if proc.poll() is not None:
-            _, stderr = proc.communicate()
-            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
-            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+        try:
+            create_tunnel_with_password(jump, LOCAL_PORT, host['host'], REMOTE_LIBVIRT_PORT)
+        except Exception as e:
+            logger.error(f"Failed to create SSH tunnel: {e}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel error: {e}")
     else:
         logger.info("Tunnel already exists")
 
