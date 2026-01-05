@@ -7,6 +7,10 @@ import psutil
 import time
 import libvirt
 import os
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -38,6 +42,9 @@ def get_vms(vm: str = Query(..., description="VM name")):
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = vm_host.get("port", 16509)
 
+    logger.info(f"Getting VMs from host: {vm}")
+    logger.info(f"Jump host: {jump['host']}:{jump['port']}, Remote: {vm_host['host']}:{REMOTE_LIBVIRT_PORT}")
+
     def tunnel_exists():
         for proc in psutil.process_iter(attrs=['cmdline']):
             cmd = ' '.join(proc.info['cmdline'])
@@ -46,19 +53,31 @@ def get_vms(vm: str = Query(..., description="VM name")):
         return False
 
     if not tunnel_exists():
+        logger.info(f"Tunnel not found, creating SSH tunnel to {jump['host']}:{jump['port']}")
         cmd = [
             "ssh",
             "-o", "StrictHostKeyChecking=no",
             "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
             f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
         ]
-        subprocess.Popen(cmd)
-        time.sleep(2)
+        logger.info(f"SSH command: {' '.join(cmd)}")
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        logger.info(f"SSH process started with PID: {proc.pid}")
+        time.sleep(3)
+        if proc.poll() is not None:
+            _, stderr = proc.communicate()
+            logger.error(f"SSH tunnel failed immediately: {stderr.decode()}")
+            raise HTTPException(status_code=500, detail=f"SSH tunnel failed: {stderr.decode()}")
+    else:
+        logger.info("Tunnel already exists")
 
     try:
+        logger.info(f"Attempting to connect to libvirt on 127.0.0.1:{LOCAL_PORT}")
         conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
         if conn is None:
+            logger.error("libvirt connection returned None")
             raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
+        logger.info("Successfully connected to libvirt")
         all_domains = conn.listAllDomains(0)
         state_map = {
             libvirt.VIR_DOMAIN_NOSTATE: "nostate",
@@ -81,6 +100,7 @@ def get_vms(vm: str = Query(..., description="VM name")):
             })
         conn.close()
     except Exception as e:
+        logger.error(f"Libvirt error: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
 
     # Кэшируем в YAML
