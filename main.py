@@ -40,6 +40,8 @@ def get_vms(vm: str = Query(..., description="VM name")):
 
     def tunnel_exists():
         for proc in psutil.process_iter(attrs=['cmdline']):
+            if proc.info['cmdline'] is None:
+                continue
             cmd = ' '.join(proc.info['cmdline'])
             if f"-L {LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd and jump['user'] in cmd:
                 return True
@@ -113,6 +115,8 @@ def start_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
 
     def tunnel_exists():
         for proc in psutil.process_iter(attrs=['cmdline']):
+            if proc.info['cmdline'] is None:
+                continue
             cmd = ' '.join(proc.info['cmdline'])
             if f"-L {LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd and jump['user'] in cmd:
                 return True
@@ -156,6 +160,8 @@ def stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
 
     def tunnel_exists():
         for proc in psutil.process_iter(attrs=['cmdline']):
+            if proc.info['cmdline'] is None:
+                continue
             cmd = ' '.join(proc.info['cmdline'])
             if f"-L {LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd and jump['user'] in cmd:
                 return True
@@ -222,6 +228,8 @@ def force_stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
 
     def tunnel_exists():
         for proc in psutil.process_iter(attrs=['cmdline']):
+            if proc.info['cmdline'] is None:
+                continue
             cmd = ' '.join(proc.info['cmdline'])
             if f"-L {LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd and jump['user'] in cmd:
                 return True
