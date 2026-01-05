@@ -1,2 +1,2 @@
 #!/bin/bash
-ssh -p 3003 -N -L 14444:172.20.0.198:22 gate@212.192.123.3
+ssh -o StrictHostKeyChecking=no -L 14444:172.20.0.198:16509 gate@212.192.123.3 -p 3003 -N

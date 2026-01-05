@@ -2,13 +2,16 @@ jump_host:
   host: 212.192.123.3
   port: 3003
   user: gate
+  password: 13forEst+
 local_tunnel_port: 14444
 vms:
 - host: 172.20.0.198
   name: VM Host 1
-  port: 16509
+  port: 22
   user: ggga1
+  password: ok09892!I
 - host: 172.20.0.199
   name: VM Host 2
-  port: 16509
+  port: 22
   user: ggga2
+  password: password_for_ggga2

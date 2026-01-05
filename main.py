@@ -7,6 +7,7 @@ import psutil
 import time
 import libvirt
 import os
+import shutil
 
 app = FastAPI()
 
@@ -48,12 +49,21 @@ def get_vms(vm: str = Query(..., description="VM name")):
         return False
 
     if not tunnel_exists():
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-        ]
+        if shutil.which("sshpass") and jump.get("password"):
+            cmd = [
+                "sshpass", "-p", jump["password"],
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-N", "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
+                f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+            ]
+        else:
+            cmd = [
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
+                f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
+            ]
         subprocess.Popen(cmd)
         time.sleep(2)
 
@@ -123,12 +133,21 @@ def start_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
         return False
 
     if not tunnel_exists():
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-        ]
+        if shutil.which("sshpass") and jump.get("password"):
+            cmd = [
+                "sshpass", "-p", jump["password"],
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-N", "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
+                f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+            ]
+        else:
+            cmd = [
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
+                f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
+            ]
         subprocess.Popen(cmd)
         time.sleep(2)
 
@@ -168,12 +187,21 @@ def stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
         return False
 
     if not tunnel_exists():
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-        ]
+        if shutil.which("sshpass") and jump.get("password"):
+            cmd = [
+                "sshpass", "-p", jump["password"],
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-N", "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
+                f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+            ]
+        else:
+            cmd = [
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
+                f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
+            ]
         subprocess.Popen(cmd)
         time.sleep(2)
 
@@ -236,12 +264,21 @@ def force_stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
         return False
 
     if not tunnel_exists():
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-        ]
+        if shutil.which("sshpass") and jump.get("password"):
+            cmd = [
+                "sshpass", "-p", jump["password"],
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-N", "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
+                f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+            ]
+        else:
+            cmd = [
+                "ssh",
+                "-o", "StrictHostKeyChecking=no",
+                "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
+                f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
+            ]
         subprocess.Popen(cmd)
         time_mod.sleep(2)
 
