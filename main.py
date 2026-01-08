@@ -27,6 +27,7 @@ def load_config(path="config.yaml"):
 config = load_config()
 
 tunnel_process = None
+video_tunnels = {}
 
 def start_main_tunnel():
     global tunnel_process
@@ -60,6 +61,66 @@ def stop_main_tunnel():
         except subprocess.TimeoutExpired:
             tunnel_process.kill()
 
+def get_available_local_port(start_port=9001):
+    import socket
+    port = start_port
+    while port < 10000:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(('127.0.0.1', port))
+            sock.close()
+            return port
+        except OSError:
+            port += 1
+    raise Exception("No available ports found")
+
+def create_video_tunnel(vm_ip, video_port=55554):
+    global video_tunnels
+    jump = config["jump_host"]
+    
+    tunnel_key = f"{vm_ip}:{video_port}"
+    
+    if tunnel_key in video_tunnels:
+        proc, local_port = video_tunnels[tunnel_key]
+        if proc.poll() is None:
+            return local_port
+        else:
+            del video_tunnels[tunnel_key]
+    
+    local_port = get_available_local_port()
+    
+    if shutil.which("sshpass") and jump.get("password"):
+        cmd = [
+            "sshpass", "-p", jump["password"],
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-N", "-L", f"{local_port}:{vm_ip}:{video_port}",
+            f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+        ]
+    else:
+        cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-N", "-L", f"{local_port}:{vm_ip}:{video_port}",
+            f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+        ]
+    
+    proc = subprocess.Popen(cmd)
+    time.sleep(1)
+    
+    video_tunnels[tunnel_key] = (proc, local_port)
+    return local_port
+
+def cleanup_video_tunnels():
+    global video_tunnels
+    for tunnel_key, (proc, _) in video_tunnels.items():
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    video_tunnels.clear()
+
 @app.on_event("startup")
 async def startup_event():
     start_main_tunnel()
@@ -67,8 +128,67 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     stop_main_tunnel()
+    cleanup_video_tunnels()
 
 atexit.register(stop_main_tunnel)
+atexit.register(cleanup_video_tunnels)
+
+@app.post("/video/connect")
+def connect_video_stream(vm_ip: str = Body(...), video_port: int = Body(default=55554)):
+    """
+    Создать SSH туннель для видеопотока CrystalCloudeServer.
+    
+    vm_ip: IP адрес ВМ (внутри VMS Host)
+    video_port: порт видеопотока на ВМ (по умолчанию 55554 для CrystalCloudeServer)
+    """
+    try:
+        local_port = create_video_tunnel(vm_ip, video_port)
+        return {
+            "status": "connected",
+            "vm_ip": vm_ip,
+            "video_port": video_port,
+            "local_port": local_port,
+            "connection_uri": f"127.0.0.1:{local_port}"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video tunnel error: {str(e)}")
+
+@app.post("/video/disconnect")
+def disconnect_video_stream(vm_ip: str = Body(...), video_port: int = Body(default=55554)):
+    """
+    Закрыть SSH туннель видеопотока.
+    
+    vm_ip: IP адрес ВМ
+    video_port: порт видеопотока на ВМ
+    """
+    global video_tunnels
+    tunnel_key = f"{vm_ip}:{video_port}"
+    
+    if tunnel_key in video_tunnels:
+        proc, local_port = video_tunnels[tunnel_key]
+        try:
+            proc.terminate()
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        del video_tunnels[tunnel_key]
+        return {"status": "disconnected", "vm_ip": vm_ip, "video_port": video_port}
+    else:
+        return {"status": "not_connected", "vm_ip": vm_ip, "video_port": video_port}
+
+@app.get("/video/status")
+def get_video_status():
+    """Получить статус всех активных видеопотоков"""
+    tunnels_info = []
+    for tunnel_key, (proc, local_port) in video_tunnels.items():
+        vm_ip, video_port = tunnel_key.split(':')
+        tunnels_info.append({
+            "vm_ip": vm_ip,
+            "video_port": int(video_port),
+            "local_port": local_port,
+            "active": proc.poll() is None
+        })
+    return {"active_tunnels": tunnels_info}
 
 @app.get("/vms/list")
 def list_vm_hosts():
