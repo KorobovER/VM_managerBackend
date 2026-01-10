@@ -123,7 +123,10 @@ def cleanup_video_tunnels():
 
 def tcp_relay_handler(client_socket, remote_host, remote_port, vm_ip, proxy_port):
     """Перенаправляет TCP трафик между клиентом и удалённым хостом"""
-    client_addr = client_socket.getpeername()
+    try:
+        client_addr = client_socket.getpeername()
+    except:
+        client_addr = "unknown"
     print(f"[PROXY {vm_ip}:{proxy_port}] Client connected from {client_addr}")
     
     remote_socket = None
@@ -209,11 +212,13 @@ def start_tcp_proxy(vm_ip, video_port=55554):
     
     def proxy_listener():
         """Слушает входящие подключения и перенаправляет их"""
+        print(f"[PROXY] Listener started for {proxy_key} on port {local_tunnel_port}")
         try:
             while tcp_proxies.get(proxy_key, {}).get("active", False):
                 try:
                     proxy_socket.settimeout(1)
                     client_socket, client_addr = proxy_socket.accept()
+                    print(f"[PROXY] Accepted connection from {client_addr}")
                     
                     handler_thread = threading.Thread(
                         target=tcp_relay_handler,
