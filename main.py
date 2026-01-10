@@ -225,6 +225,31 @@ def video_stream(local_port: int = Query(default=9002)):
         headers={"Content-Disposition": "inline"}
     )
 
+@app.get("/rdp/launch")
+def get_rdp_launch_url(vm_ip: str = Query(...), rdp_port: int = Query(default=3389), local_port: int = Query(default=33188)):
+    """Получить информацию для подключения через RDP"""
+    
+    return {
+        "protocol": "RDP",
+        "connection_string": f"mstsc /v:127.0.0.1:{local_port}",
+        "rdp_file_content": f"""full address:s:127.0.0.1:{local_port}
+username:s:
+password:s:
+domain:s:
+""",
+        "instructions": [
+            f"1. Открыть SSH туннель: ssh -o StrictHostKeyChecking=no -L {local_port}:{vm_ip}:{rdp_port} gate@212.192.123.3 -p 3003 -N",
+            f"2. Запустить RDP клиент: mstsc /v:127.0.0.1:{local_port}",
+            "3. Ввести учётные данные для подключения"
+        ],
+        "tunnel_info": {
+            "vm_ip": vm_ip,
+            "rdp_port": rdp_port,
+            "local_port": local_port,
+            "ssh_command": f"ssh -o StrictHostKeyChecking=no -L {local_port}:{vm_ip}:{rdp_port} gate@212.192.123.3 -p 3003 -N"
+        }
+    }
+
 @app.get("/video/launch")
 def get_launch_url(vm_ip: str = Query(...), video_port: int = Query(default=55554), local_port: int = Query(default=9002)):
     """Получить gcloud:// URL для запуска в gcl-launcher"""
