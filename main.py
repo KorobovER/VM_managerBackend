@@ -197,14 +197,39 @@ def video_stream(local_port: int = Query(default=9002)):
             sock.settimeout(5)
             sock.connect(('127.0.0.1', local_port))
             
-            while True:
+            # Попробовать разные команды инициализации
+            init_commands = [
+                b'',  # Пустая команда
+                b'\x00',  # Один нулевой байт
+                b'\x00\x00\x00\x00',  # Четыре нулевых байта
+                b'CONNECT',  # Текстовая команда
+                b'START',  # Текстовая команда
+            ]
+            
+            data_received = False
+            for cmd in init_commands:
+                if cmd:
+                    sock.send(cmd)
+                
                 try:
                     chunk = sock.recv(4096)
-                    if not chunk:
+                    if chunk:
+                        data_received = True
+                        yield chunk
                         break
-                    yield chunk
                 except socket.timeout:
-                    break
+                    continue
+            
+            if data_received:
+                # Продолжить читать остальной поток
+                while True:
+                    try:
+                        chunk = sock.recv(4096)
+                        if not chunk:
+                            break
+                        yield chunk
+                    except socket.timeout:
+                        break
         except Exception as e:
             print(f"Stream error: {e}")
         finally:
