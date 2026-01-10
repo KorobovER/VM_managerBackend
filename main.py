@@ -268,22 +268,30 @@ def rdp_stream(local_port: int = Query(default=33188)):
     )
 
 @app.get("/rdp/launch")
-def get_rdp_launch_url(vm_ip: str = Query(...), rdp_port: int = Query(default=3389), local_port: int = Query(default=33188)):
-    """Получить информацию для подключения через RDP"""
+def get_rdp_launch_url(vm_ip: str = Query(...), rdp_port: int = Query(default=3389), local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default="")):
+    """Получить gcloud URL для запуска в gci-launcher"""
+    
+    # Генерировать gcloud URL для gci-launcher
+    gcloud_url = f"gcloud://rdp?host=127.0.0.1&port={local_port}&vm_ip={vm_ip}&rdp_port={rdp_port}"
+    if username:
+        gcloud_url += f"&username={username}"
+    if password:
+        gcloud_url += f"&password={password}"
     
     return {
         "protocol": "RDP",
+        "gcloud_url": gcloud_url,
+        "launch_link": f'<a href="{gcloud_url}">Подключиться к ВМ</a>',
         "connection_string": f"mstsc /v:127.0.0.1:{local_port}",
         "rdp_file_content": f"""full address:s:127.0.0.1:{local_port}
-username:s:
-password:s:
+username:s:{username}
+password:s:{password}
 domain:s:
 """,
-        "stream_url": f"http://sinthy.fvds.ru:9922/rdp/stream?local_port={local_port}",
         "instructions": [
             f"1. Открыть SSH туннель: ssh -o StrictHostKeyChecking=no -L {local_port}:{vm_ip}:{rdp_port} gate@212.192.123.3 -p 3003 -N",
-            f"2. Получить видеопоток: curl http://sinthy.fvds.ru:9922/rdp/stream?local_port={local_port}",
-            "3. Или подключиться через RDP клиент: mstsc /v:127.0.0.1:{local_port}"
+            f"2. Кликнуть на ссылку: {gcloud_url}",
+            f"3. Или подключиться вручную: mstsc /v:127.0.0.1:{local_port}"
         ],
         "tunnel_info": {
             "vm_ip": vm_ip,
