@@ -225,6 +225,64 @@ def video_stream(local_port: int = Query(default=9002)):
         headers={"Content-Disposition": "inline"}
     )
 
+@app.get("/rdp/stream")
+def rdp_stream(local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default="")):
+    """Получить видеопоток с RDP сессии через FreeRDP"""
+    from fastapi.responses import StreamingResponse
+    
+    def generate_rdp_stream():
+        try:
+            import subprocess
+            
+            # Команда для запуска xfreerdp с захватом видео
+            cmd = [
+                "xfreerdp",
+                f"/v:127.0.0.1:{local_port}",
+                "/bpp:32",
+                "/gfx:avc420",
+                "/gfx-h264:avc420",
+                "/rfx",
+                "/compression:off",
+                "/audio-mode:1",
+                "/sound",
+                "/microphone",
+                "/clipboard",
+                "/dynamic-resolution",
+                "/cert-ignore",
+            ]
+            
+            if username:
+                cmd.append(f"/u:{username}")
+            if password:
+                cmd.append(f"/p:{password}")
+            
+            print(f"Starting RDP stream: {' '.join(cmd)}")
+            
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=4096
+            )
+            
+            while True:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                yield chunk
+                
+        except Exception as e:
+            print(f"RDP stream error: {e}")
+        finally:
+            if proc:
+                proc.terminate()
+                proc.wait(timeout=5)
+    
+    return StreamingResponse(
+        generate_rdp_stream(),
+        media_type="application/octet-stream"
+    )
+
 @app.get("/rdp/launch")
 def get_rdp_launch_url(vm_ip: str = Query(...), rdp_port: int = Query(default=3389), local_port: int = Query(default=33188)):
     """Получить информацию для подключения через RDP"""
@@ -237,10 +295,11 @@ username:s:
 password:s:
 domain:s:
 """,
+        "stream_url": f"http://sinthy.fvds.ru:9922/rdp/stream?local_port={local_port}",
         "instructions": [
             f"1. Открыть SSH туннель: ssh -o StrictHostKeyChecking=no -L {local_port}:{vm_ip}:{rdp_port} gate@212.192.123.3 -p 3003 -N",
-            f"2. Запустить RDP клиент: mstsc /v:127.0.0.1:{local_port}",
-            "3. Ввести учётные данные для подключения"
+            f"2. Получить видеопоток: curl http://sinthy.fvds.ru:9922/rdp/stream?local_port={local_port}",
+            "3. Или подключиться через RDP клиент: mstsc /v:127.0.0.1:{local_port}"
         ],
         "tunnel_info": {
             "vm_ip": vm_ip,
