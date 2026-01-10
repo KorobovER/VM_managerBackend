@@ -11,6 +11,7 @@ import shutil
 import atexit
 import socket
 import threading
+import select
 
 app = FastAPI()
 
@@ -128,49 +129,49 @@ def tcp_relay_handler(client_socket, remote_host, remote_port, vm_ip, proxy_port
     remote_socket = None
     try:
         remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        remote_socket.settimeout(10)
+        remote_socket.settimeout(5)
         remote_socket.connect((remote_host, remote_port))
         print(f"[PROXY {vm_ip}:{proxy_port}] Connected to {remote_host}:{remote_port}")
         
-        def forward_data(src, dst, direction):
-            """Перенаправляет данные из src в dst"""
+        client_socket.setblocking(False)
+        remote_socket.setblocking(False)
+        
+        import select
+        
+        while True:
             try:
-                while True:
-                    data = src.recv(4096)
-                    if not data:
-                        print(f"[PROXY {vm_ip}:{proxy_port}] {direction} closed")
-                        break
-                    dst.send(data)
-                    print(f"[PROXY {vm_ip}:{proxy_port}] {direction} transferred {len(data)} bytes")
-            except Exception as e:
-                print(f"[PROXY {vm_ip}:{proxy_port}] {direction} error: {e}")
-            finally:
-                try:
-                    src.close()
-                except:
-                    pass
-                try:
-                    dst.close()
-                except:
-                    pass
-        
-        client_thread = threading.Thread(
-            target=forward_data,
-            args=(client_socket, remote_socket, "Client→Server"),
-            daemon=True
-        )
-        server_thread = threading.Thread(
-            target=forward_data,
-            args=(remote_socket, client_socket, "Server→Client"),
-            daemon=True
-        )
-        
-        client_thread.start()
-        server_thread.start()
-        
-        client_thread.join()
-        server_thread.join()
-        
+                readable, _, exceptional = select.select(
+                    [client_socket, remote_socket],
+                    [],
+                    [client_socket, remote_socket],
+                    1
+                )
+                
+                if exceptional:
+                    print(f"[PROXY {vm_ip}:{proxy_port}] Socket exception")
+                    break
+                
+                for sock in readable:
+                    try:
+                        data = sock.recv(4096)
+                        if not data:
+                            print(f"[PROXY {vm_ip}:{proxy_port}] Connection closed by {'client' if sock == client_socket else 'server'}")
+                            return
+                        
+                        if sock == client_socket:
+                            remote_socket.sendall(data)
+                            print(f"[PROXY {vm_ip}:{proxy_port}] Client→Server: {len(data)} bytes")
+                        else:
+                            client_socket.sendall(data)
+                            print(f"[PROXY {vm_ip}:{proxy_port}] Server→Client: {len(data)} bytes")
+                    except socket.error as e:
+                        print(f"[PROXY {vm_ip}:{proxy_port}] Socket error: {e}")
+                        return
+                        
+            except select.error as e:
+                print(f"[PROXY {vm_ip}:{proxy_port}] Select error: {e}")
+                break
+                
     except Exception as e:
         print(f"[PROXY {vm_ip}:{proxy_port}] Connection error: {e}")
     finally:
