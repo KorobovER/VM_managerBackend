@@ -89,24 +89,19 @@ def create_video_tunnel(vm_ip, video_port=55554):
     
     local_port = get_available_local_port()
     
-    if shutil.which("sshpass") and jump.get("password"):
-        cmd = [
-            "sshpass", "-p", jump["password"],
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-N", "-L", f"{local_port}:{vm_ip}:{video_port}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
-        ]
-    else:
-        cmd = [
-            "ssh",
-            "-o", "StrictHostKeyChecking=no",
-            "-N", "-L", f"{local_port}:{vm_ip}:{video_port}",
-            f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
-        ]
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-N", "-L", f"{local_port}:{vm_ip}:{video_port}",
+        f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+    ]
     
-    proc = subprocess.Popen(cmd)
-    time.sleep(1)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(2)
+    
+    if proc.poll() is not None:
+        stderr = proc.stderr.read().decode() if proc.stderr else ""
+        raise Exception(f"SSH tunnel failed: {stderr}")
     
     video_tunnels[tunnel_key] = (proc, local_port)
     return local_port
@@ -191,12 +186,10 @@ def get_video_status():
     return {"active_tunnels": tunnels_info}
 
 @app.get("/video/analyze")
-def analyze_video_stream(vm_ip: str = Query(...), video_port: int = Query(default=55554)):
-    """Анализировать формат видеопотока CrystalCloudeServer через туннель"""
+def analyze_video_stream(local_port: int = Query(default=9001)):
+    """Анализировать формат видеопотока CrystalCloudeServer через готовый туннель"""
     import socket
     try:
-        local_port = create_video_tunnel(vm_ip, video_port)
-        
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(3)
         sock.connect(('127.0.0.1', local_port))
@@ -216,16 +209,15 @@ def analyze_video_stream(vm_ip: str = Query(...), video_port: int = Query(defaul
             "first_200_chars_text": text_data,
             "detected_format": detect_format(data),
             "tunnel_info": {
-                "vm_ip": vm_ip,
-                "video_port": video_port,
-                "local_port": local_port
+                "local_port": local_port,
+                "note": "Используется готовый SSH туннель"
             }
         }
         return analysis
     except socket.timeout:
-        return {"error": "Connection timeout - server may not be responding"}
+        return {"error": f"Connection timeout on port {local_port} - check if SSH tunnel is running"}
     except ConnectionRefusedError:
-        return {"error": "Connection refused - check if CrystalCloudeServer is running"}
+        return {"error": f"Connection refused on port {local_port} - open SSH tunnel first"}
     except Exception as e:
         return {"error": str(e)}
 
