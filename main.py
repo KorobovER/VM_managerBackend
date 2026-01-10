@@ -185,6 +185,56 @@ def get_video_status():
         })
     return {"active_tunnels": tunnels_info}
 
+@app.get("/video/stream")
+def video_stream(local_port: int = Query(default=9002)):
+    """Получить видеопоток от CrystalCloudeServer и передать клиенту"""
+    import socket
+    from fastapi.responses import StreamingResponse
+    
+    def generate_stream():
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect(('127.0.0.1', local_port))
+            
+            while True:
+                try:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    yield chunk
+                except socket.timeout:
+                    break
+        except Exception as e:
+            print(f"Stream error: {e}")
+        finally:
+            sock.close()
+    
+    return StreamingResponse(
+        generate_stream(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": "inline"}
+    )
+
+@app.get("/video/launch")
+def get_launch_url(vm_ip: str = Query(...), video_port: int = Query(default=55554), local_port: int = Query(default=9002)):
+    """Получить gcloud:// URL для запуска в gcl-launcher"""
+    import urllib.parse
+    
+    gcloud_url = f"gcloud://connect?host=127.0.0.1&port={local_port}&stream_url=http://sinthy.fvds.ru:9922/video/stream?local_port={local_port}"
+    
+    return {
+        "gcloud_url": gcloud_url,
+        "launch_link": f'<a href="{gcloud_url}">Запустить видеопоток</a>',
+        "instructions": "Кликни на ссылку выше или скопируй URL в адресную строку",
+        "tunnel_info": {
+            "vm_ip": vm_ip,
+            "video_port": video_port,
+            "local_port": local_port,
+            "stream_endpoint": f"http://sinthy.fvds.ru:9922/video/stream?local_port={local_port}"
+        }
+    }
+
 @app.get("/video/analyze")
 def analyze_video_stream(local_port: int = Query(default=9001)):
     """Анализировать формат видеопотока CrystalCloudeServer через готовый туннель"""
