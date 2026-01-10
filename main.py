@@ -194,46 +194,26 @@ def video_stream(local_port: int = Query(default=9002)):
     def generate_stream():
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
+            sock.settimeout(30)  # Длительный таймаут для ожидания видеопотока
             sock.connect(('127.0.0.1', local_port))
+            print(f"Connected to port {local_port}, waiting for stream...")
             
-            # Попробовать разные команды инициализации
-            init_commands = [
-                (b'', 'empty'),
-                (b'\x00', 'single_null'),
-                (b'\x00\x00\x00\x00', 'four_nulls'),
-                (b'CONNECT', 'CONNECT'),
-                (b'START', 'START'),
-            ]
-            
-            data_received = False
-            for cmd, cmd_name in init_commands:
-                if cmd:
-                    sock.send(cmd)
-                    print(f"Sent init command: {cmd_name}")
-                
+            # Просто читать данные без отправки команд
+            chunk_count = 0
+            while True:
                 try:
                     chunk = sock.recv(4096)
-                    if chunk:
-                        print(f"Received {len(chunk)} bytes with command: {cmd_name}")
+                    if not chunk:
+                        print(f"Connection closed after {chunk_count} chunks")
+                        break
+                    chunk_count += 1
+                    if chunk_count == 1:
+                        print(f"First chunk received: {len(chunk)} bytes")
                         print(f"First 100 bytes: {chunk[:100]}")
-                        data_received = True
-                        yield chunk
-                        break
+                    yield chunk
                 except socket.timeout:
-                    print(f"Timeout with command: {cmd_name}")
-                    continue
-            
-            if data_received:
-                # Продолжить читать остальной поток
-                while True:
-                    try:
-                        chunk = sock.recv(4096)
-                        if not chunk:
-                            break
-                        yield chunk
-                    except socket.timeout:
-                        break
+                    print(f"Timeout after {chunk_count} chunks")
+                    break
         except Exception as e:
             print(f"Stream error: {e}")
         finally:
