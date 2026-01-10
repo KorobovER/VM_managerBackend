@@ -226,19 +226,39 @@ def video_stream(local_port: int = Query(default=9002)):
     )
 
 @app.get("/rdp/stream")
-def rdp_stream(local_port: int = Query(default=33188)):
-    """Проксировать RDP поток напрямую от сервера к клиенту"""
+def rdp_stream(local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default="")):
+    """Проксировать RDP поток напрямую от сервера к клиенту с аутентификацией"""
     import socket
+    import time
     from fastapi.responses import StreamingResponse
     
     def generate_rdp_stream():
         sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(30)
+            sock.settimeout(10)
             sock.connect(('127.0.0.1', local_port))
             
             print(f"RDP stream connected to 127.0.0.1:{local_port}")
+            print(f"Username: {username if username else 'anonymous'}")
+            
+            # Отправить RDP X.224 Connection Request
+            rdp_init = bytes([
+                0x03, 0x00, 0x00, 0x13, 0x0e, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x03, 0x00, 0x00, 0x00
+            ])
+            
+            sock.send(rdp_init)
+            print(f"Sent RDP initialization packet")
+            
+            # Если есть логин и пароль - отправить их
+            if username or password:
+                # Простой способ передачи учётных данных через RDP
+                auth_data = f"{username}:{password}".encode('utf-8')
+                sock.send(auth_data)
+                print(f"Sent authentication data")
+            
+            # Ждём ответа
+            time.sleep(1)
             
             chunk_count = 0
             while True:
@@ -248,6 +268,8 @@ def rdp_stream(local_port: int = Query(default=33188)):
                         print(f"RDP connection closed after {chunk_count} chunks")
                         break
                     chunk_count += 1
+                    if chunk_count == 1:
+                        print(f"First chunk received: {len(chunk)} bytes")
                     if chunk_count % 100 == 0:
                         print(f"RDP stream: {chunk_count} chunks transmitted ({chunk_count * 4096 / 1024 / 1024:.2f} MB)")
                     yield chunk
