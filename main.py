@@ -226,84 +226,41 @@ def video_stream(local_port: int = Query(default=9002)):
     )
 
 @app.get("/rdp/stream")
-def rdp_stream(local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default="")):
-    """Получить RDP видеопоток через rdesktop"""
-    import subprocess
-    import tempfile
-    import os
+def rdp_stream(local_port: int = Query(default=33188)):
+    """Проксировать RDP поток напрямую от сервера к клиенту"""
+    import socket
     from fastapi.responses import StreamingResponse
     
     def generate_rdp_stream():
-        proc = None
+        sock = None
         try:
-            print(f"Connecting to RDP server at 127.0.0.1:{local_port}")
-            print(f"Username: {username if username else 'anonymous'}")
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(30)
+            sock.connect(('127.0.0.1', local_port))
             
-            # Создать временный файл для видео
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tmp:
-                video_file = tmp.name
+            print(f"RDP stream connected to 127.0.0.1:{local_port}")
             
-            # Команда для запуска rdesktop с захватом видео
-            cmd = [
-                "rdesktop",
-                f"-u", username if username else "guest",
-                f"-p", password if password else "",
-                f"-g", "1920x1080",
-                f"-a", "32",
-                f"-r", f"disk:video={video_file}",
-                f"127.0.0.1:{local_port}"
-            ]
-            
-            print(f"Starting rdesktop: {' '.join(cmd[:5])}...")
-            
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=4096
-            )
-            
-            # Ждём, пока видеофайл начнёт заполняться
-            import time
-            time.sleep(2)
-            
-            # Читать видеофайл и передавать клиенту
             chunk_count = 0
-            with open(video_file, 'rb') as f:
-                while True:
-                    chunk = f.read(4096)
+            while True:
+                try:
+                    chunk = sock.recv(4096)
                     if not chunk:
-                        time.sleep(0.1)  # Ждём новых данных
-                        if proc.poll() is not None:  # Процесс завершился
-                            print(f"RDP connection closed after {chunk_count} chunks")
-                            break
-                        continue
+                        print(f"RDP connection closed after {chunk_count} chunks")
+                        break
                     chunk_count += 1
                     if chunk_count == 1:
                         print(f"First chunk received: {len(chunk)} bytes")
                     if chunk_count % 100 == 0:
                         print(f"RDP stream: {chunk_count} chunks transmitted ({chunk_count * 4096 / 1024 / 1024:.2f} MB)")
                     yield chunk
-                    
-        except FileNotFoundError:
-            print("ERROR: rdesktop not found. Install with: sudo apt-get install rdesktop")
-            yield b"ERROR: rdesktop not installed\n"
+                except socket.timeout:
+                    print(f"RDP stream timeout after {chunk_count} chunks")
+                    break
         except Exception as e:
             print(f"RDP stream error: {e}")
-            yield f"ERROR: {str(e)}\n".encode()
         finally:
-            if proc:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-            # Удалить временный файл
-            try:
-                if 'video_file' in locals():
-                    os.unlink(video_file)
-            except:
-                pass
+            if sock:
+                sock.close()
     
     return StreamingResponse(
         generate_rdp_stream(),
