@@ -227,60 +227,83 @@ def video_stream(local_port: int = Query(default=9002)):
 
 @app.get("/rdp/stream")
 def rdp_stream(local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default="")):
-    """Проксировать RDP поток напрямую от сервера к клиенту с аутентификацией"""
-    import socket
-    import time
+    """Получить RDP видеопоток через rdesktop"""
+    import subprocess
+    import tempfile
+    import os
     from fastapi.responses import StreamingResponse
     
     def generate_rdp_stream():
-        sock = None
+        proc = None
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(10)
-            sock.connect(('127.0.0.1', local_port))
-            
-            print(f"RDP stream connected to 127.0.0.1:{local_port}")
+            print(f"Connecting to RDP server at 127.0.0.1:{local_port}")
             print(f"Username: {username if username else 'anonymous'}")
             
-            # Отправить RDP X.224 Connection Request
-            rdp_init = bytes([
-                0x03, 0x00, 0x00, 0x13, 0x0e, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x00, 0x03, 0x00, 0x00, 0x00
-            ])
+            # Создать временный файл для видео
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".bin") as tmp:
+                video_file = tmp.name
             
-            sock.send(rdp_init)
-            print(f"Sent RDP initialization packet")
+            # Команда для запуска rdesktop с захватом видео
+            cmd = [
+                "rdesktop",
+                f"-u", username if username else "guest",
+                f"-p", password if password else "",
+                f"-g", "1920x1080",
+                f"-a", "32",
+                f"-r", f"disk:video={video_file}",
+                f"127.0.0.1:{local_port}"
+            ]
             
-            # Если есть логин и пароль - отправить их
-            if username or password:
-                # Простой способ передачи учётных данных через RDP
-                auth_data = f"{username}:{password}".encode('utf-8')
-                sock.send(auth_data)
-                print(f"Sent authentication data")
+            print(f"Starting rdesktop: {' '.join(cmd[:5])}...")
             
-            # Ждём ответа
-            time.sleep(1)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=4096
+            )
             
+            # Ждём, пока видеофайл начнёт заполняться
+            import time
+            time.sleep(2)
+            
+            # Читать видеофайл и передавать клиенту
             chunk_count = 0
-            while True:
-                try:
-                    chunk = sock.recv(4096)
+            with open(video_file, 'rb') as f:
+                while True:
+                    chunk = f.read(4096)
                     if not chunk:
-                        print(f"RDP connection closed after {chunk_count} chunks")
-                        break
+                        time.sleep(0.1)  # Ждём новых данных
+                        if proc.poll() is not None:  # Процесс завершился
+                            print(f"RDP connection closed after {chunk_count} chunks")
+                            break
+                        continue
                     chunk_count += 1
                     if chunk_count == 1:
                         print(f"First chunk received: {len(chunk)} bytes")
                     if chunk_count % 100 == 0:
                         print(f"RDP stream: {chunk_count} chunks transmitted ({chunk_count * 4096 / 1024 / 1024:.2f} MB)")
                     yield chunk
-                except socket.timeout:
-                    print(f"RDP stream timeout after {chunk_count} chunks")
-                    break
+                    
+        except FileNotFoundError:
+            print("ERROR: rdesktop not found. Install with: sudo apt-get install rdesktop")
+            yield b"ERROR: rdesktop not installed\n"
         except Exception as e:
             print(f"RDP stream error: {e}")
+            yield f"ERROR: {str(e)}\n".encode()
         finally:
-            if sock:
-                sock.close()
+            if proc:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            # Удалить временный файл
+            try:
+                if 'video_file' in locals():
+                    os.unlink(video_file)
+            except:
+                pass
     
     return StreamingResponse(
         generate_rdp_stream(),
