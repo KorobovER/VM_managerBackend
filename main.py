@@ -190,6 +190,75 @@ def get_video_status():
         })
     return {"active_tunnels": tunnels_info}
 
+@app.get("/video/analyze")
+def analyze_video_stream(vm_ip: str = Query(...), video_port: int = Query(default=55554)):
+    """Анализировать формат видеопотока CrystalCloudeServer"""
+    import socket
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        sock.connect((vm_ip, video_port))
+        
+        data = sock.recv(512)
+        sock.close()
+        
+        if not data:
+            return {"error": "No data received"}
+        
+        hex_data = data[:64].hex()
+        text_data = data.decode('utf-8', errors='ignore')[:200]
+        
+        analysis = {
+            "data_length": len(data),
+            "first_64_bytes_hex": hex_data,
+            "first_200_chars_text": text_data,
+            "detected_format": detect_format(data)
+        }
+        return analysis
+    except socket.timeout:
+        return {"error": "Connection timeout - server may not be responding"}
+    except ConnectionRefusedError:
+        return {"error": "Connection refused - check if CrystalCloudeServer is running"}
+    except Exception as e:
+        return {"error": str(e)}
+
+def detect_format(data: bytes) -> dict:
+    """Определить формат видеопотока"""
+    result = {
+        "is_http": False,
+        "is_websocket": False,
+        "is_mjpeg": False,
+        "is_h264": False,
+        "is_binary": False,
+        "detected_protocol": "unknown"
+    }
+    
+    if data.startswith(b'HTTP'):
+        result["is_http"] = True
+        result["detected_protocol"] = "HTTP"
+        if b'MJPEG' in data or b'image/jpeg' in data or b'multipart' in data:
+            result["is_mjpeg"] = True
+            result["detected_protocol"] = "HTTP MJPEG"
+    elif data.startswith(b'GET') or data.startswith(b'POST'):
+        result["is_http"] = True
+        result["detected_protocol"] = "HTTP Request"
+    elif b'Upgrade: websocket' in data or b'upgrade: websocket' in data:
+        result["is_websocket"] = True
+        result["detected_protocol"] = "WebSocket"
+    elif b'H.264' in data or b'h264' in data or b'avc1' in data:
+        result["is_h264"] = True
+        result["detected_protocol"] = "H.264"
+    elif data[:4] == b'\x00\x00\x00\x01' or data[:3] == b'\x00\x00\x01':
+        result["is_h264"] = True
+        result["detected_protocol"] = "H.264 (NAL unit)"
+    elif data[:2] == b'\xff\xd8':
+        result["detected_protocol"] = "JPEG Frame"
+    else:
+        result["is_binary"] = True
+        result["detected_protocol"] = "Binary/Unknown"
+    
+    return result
+
 @app.get("/vms/list")
 def list_vm_hosts():
     return {"vms": [v["name"] for v in config["vms"]]}
