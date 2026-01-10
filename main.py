@@ -199,25 +199,29 @@ def video_stream(local_port: int = Query(default=9002)):
             
             # Попробовать разные команды инициализации
             init_commands = [
-                b'',  # Пустая команда
-                b'\x00',  # Один нулевой байт
-                b'\x00\x00\x00\x00',  # Четыре нулевых байта
-                b'CONNECT',  # Текстовая команда
-                b'START',  # Текстовая команда
+                (b'', 'empty'),
+                (b'\x00', 'single_null'),
+                (b'\x00\x00\x00\x00', 'four_nulls'),
+                (b'CONNECT', 'CONNECT'),
+                (b'START', 'START'),
             ]
             
             data_received = False
-            for cmd in init_commands:
+            for cmd, cmd_name in init_commands:
                 if cmd:
                     sock.send(cmd)
+                    print(f"Sent init command: {cmd_name}")
                 
                 try:
                     chunk = sock.recv(4096)
                     if chunk:
+                        print(f"Received {len(chunk)} bytes with command: {cmd_name}")
+                        print(f"First 100 bytes: {chunk[:100]}")
                         data_received = True
                         yield chunk
                         break
                 except socket.timeout:
+                    print(f"Timeout with command: {cmd_name}")
                     continue
             
             if data_received:
