@@ -192,12 +192,14 @@ def get_video_status():
 
 @app.get("/video/analyze")
 def analyze_video_stream(vm_ip: str = Query(...), video_port: int = Query(default=55554)):
-    """Анализировать формат видеопотока CrystalCloudeServer"""
+    """Анализировать формат видеопотока CrystalCloudeServer через туннель"""
     import socket
     try:
+        local_port = create_video_tunnel(vm_ip, video_port)
+        
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(3)
-        sock.connect((vm_ip, video_port))
+        sock.connect(('127.0.0.1', local_port))
         
         data = sock.recv(512)
         sock.close()
@@ -212,7 +214,12 @@ def analyze_video_stream(vm_ip: str = Query(...), video_port: int = Query(defaul
             "data_length": len(data),
             "first_64_bytes_hex": hex_data,
             "first_200_chars_text": text_data,
-            "detected_format": detect_format(data)
+            "detected_format": detect_format(data),
+            "tunnel_info": {
+                "vm_ip": vm_ip,
+                "video_port": video_port,
+                "local_port": local_port
+            }
         }
         return analysis
     except socket.timeout:
