@@ -192,37 +192,38 @@ def video_stream(local_port: int = Query(default=9002)):
     from fastapi.responses import StreamingResponse
     
     def generate_stream():
+        sock = None
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(30)  # Длительный таймаут для ожидания видеопотока
+            sock.settimeout(30)
             sock.connect(('127.0.0.1', local_port))
-            print(f"Connected to port {local_port}, waiting for stream...")
+            print(f"Connected to CrystalCloudServer on 127.0.0.1:{local_port}")
             
-            # Просто читать данные без отправки команд
             chunk_count = 0
             while True:
                 try:
                     chunk = sock.recv(4096)
                     if not chunk:
-                        print(f"Connection closed after {chunk_count} chunks")
+                        print(f"Stream closed after {chunk_count} chunks")
                         break
                     chunk_count += 1
                     if chunk_count == 1:
                         print(f"First chunk received: {len(chunk)} bytes")
-                        print(f"First 100 bytes: {chunk[:100]}")
+                    if chunk_count % 100 == 0:
+                        print(f"Video stream: {chunk_count} chunks transmitted ({chunk_count * 4096 / 1024 / 1024:.2f} MB)")
                     yield chunk
                 except socket.timeout:
-                    print(f"Timeout after {chunk_count} chunks")
+                    print(f"Stream timeout after {chunk_count} chunks")
                     break
         except Exception as e:
             print(f"Stream error: {e}")
         finally:
-            sock.close()
+            if sock:
+                sock.close()
     
     return StreamingResponse(
         generate_stream(),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": "inline"}
+        media_type="application/octet-stream"
     )
 
 @app.get("/rdp/stream")
