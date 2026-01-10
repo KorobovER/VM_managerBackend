@@ -226,57 +226,39 @@ def video_stream(local_port: int = Query(default=9002)):
     )
 
 @app.get("/rdp/stream")
-def rdp_stream(local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default="")):
-    """Получить видеопоток с RDP сессии через FreeRDP"""
+def rdp_stream(local_port: int = Query(default=33188)):
+    """Проксировать RDP поток напрямую от сервера к клиенту"""
+    import socket
     from fastapi.responses import StreamingResponse
     
     def generate_rdp_stream():
+        sock = None
         try:
-            import subprocess
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(30)
+            sock.connect(('127.0.0.1', local_port))
             
-            # Команда для запуска xfreerdp с захватом видео
-            cmd = [
-                "xfreerdp",
-                f"/v:127.0.0.1:{local_port}",
-                "/bpp:32",
-                "/gfx:avc420",
-                "/gfx-h264:avc420",
-                "/rfx",
-                "/compression:off",
-                "/audio-mode:1",
-                "/sound",
-                "/microphone",
-                "/clipboard",
-                "/dynamic-resolution",
-                "/cert-ignore",
-            ]
+            print(f"RDP stream connected to 127.0.0.1:{local_port}")
             
-            if username:
-                cmd.append(f"/u:{username}")
-            if password:
-                cmd.append(f"/p:{password}")
-            
-            print(f"Starting RDP stream: {' '.join(cmd)}")
-            
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=4096
-            )
-            
+            chunk_count = 0
             while True:
-                chunk = proc.stdout.read(4096)
-                if not chunk:
+                try:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        print(f"RDP connection closed after {chunk_count} chunks")
+                        break
+                    chunk_count += 1
+                    if chunk_count % 100 == 0:
+                        print(f"RDP stream: {chunk_count} chunks transmitted ({chunk_count * 4096 / 1024 / 1024:.2f} MB)")
+                    yield chunk
+                except socket.timeout:
+                    print(f"RDP stream timeout after {chunk_count} chunks")
                     break
-                yield chunk
-                
         except Exception as e:
             print(f"RDP stream error: {e}")
         finally:
-            if proc:
-                proc.terminate()
-                proc.wait(timeout=5)
+            if sock:
+                sock.close()
     
     return StreamingResponse(
         generate_rdp_stream(),
