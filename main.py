@@ -201,7 +201,12 @@ def start_tcp_proxy(vm_ip, video_port=55554):
             print(f"[PROXY] Proxy already running for {proxy_key} on port {proxy_info['port']}")
             return proxy_info["port"]
     
-    local_tunnel_port = get_available_local_port(start_port=9001)
+    # Создаём SSH туннель
+    ssh_tunnel_port = create_video_tunnel(vm_ip, video_port)
+    print(f"[PROXY] SSH tunnel created on port {ssh_tunnel_port}")
+    
+    # Proxy слушает на отдельном порту
+    local_tunnel_port = get_available_local_port(start_port=9002)
     
     proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     proxy_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -222,7 +227,7 @@ def start_tcp_proxy(vm_ip, video_port=55554):
                     
                     handler_thread = threading.Thread(
                         target=tcp_relay_handler,
-                        args=(client_socket, "127.0.0.1", local_tunnel_port, vm_ip, local_tunnel_port),
+                        args=(client_socket, "127.0.0.1", ssh_tunnel_port, vm_ip, local_tunnel_port),
                         daemon=True
                     )
                     handler_thread.start()
@@ -249,6 +254,8 @@ def start_tcp_proxy(vm_ip, video_port=55554):
     listener_thread = threading.Thread(target=proxy_listener, daemon=True)
     listener_thread.start()
     proxy_threads[proxy_key] = listener_thread
+    
+    print(f"[PROXY] Listener thread started: {listener_thread.is_alive()}")
     
     return local_tunnel_port
 
