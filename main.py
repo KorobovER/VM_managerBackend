@@ -327,7 +327,7 @@ def start_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554))
                     "vm_ip": vm_ip,
                     "video_port": video_port,
                     "proxy_port": proxy_info["port"],
-                    "connection_address": f"sinthy.fvds.ru:{proxy_info['port']}",
+                    "connection_address": "sinthy.fvds.ru",
                     "ssh_tunnel_port": proxy_info.get("ssh_tunnel_port", 9001),
                     "instructions": f"Connect CrystalCloudeClient to sinthy.fvds.ru:{proxy_info['port']}"
                 }
@@ -342,7 +342,7 @@ def start_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554))
             "vm_ip": vm_ip,
             "video_port": video_port,
             "proxy_port": proxy_port,
-            "connection_address": f"sinthy.fvds.ru:{proxy_port}",
+            "connection_address": "sinthy.fvds.ru",
             "ssh_tunnel_port": ssh_tunnel_port,
             "instructions": f"Connect CrystalCloudeClient to sinthy.fvds.ru:{proxy_port}"
         }
