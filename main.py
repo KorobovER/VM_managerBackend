@@ -317,8 +317,25 @@ def start_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554))
     video_port: порт видеопотока на ВМ (по умолчанию 55554)
     """
     try:
+        proxy_key = f"{vm_ip}:{video_port}"
+        
+        if proxy_key in tcp_proxies:
+            proxy_info = tcp_proxies[proxy_key]
+            if proxy_info["active"]:
+                return {
+                    "status": "proxy_worked",
+                    "vm_ip": vm_ip,
+                    "video_port": video_port,
+                    "proxy_port": proxy_info["port"],
+                    "connection_address": f"sinthy.fvds.ru:{proxy_info['port']}",
+                    "ssh_tunnel_port": proxy_info.get("ssh_tunnel_port", 9001),
+                    "instructions": f"Connect CrystalCloudeClient to sinthy.fvds.ru:{proxy_info['port']}"
+                }
+        
         ssh_tunnel_port = create_video_tunnel(vm_ip, video_port)
         proxy_port = start_tcp_proxy(vm_ip, video_port)
+        
+        tcp_proxies[proxy_key]["ssh_tunnel_port"] = ssh_tunnel_port
         
         return {
             "status": "proxy_started",
