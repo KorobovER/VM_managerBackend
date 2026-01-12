@@ -9,7 +9,12 @@ def load_db_config():
     with open(config_path, 'r') as f:
         config = json.load(f)
     db_config = config["db"]
-    return f"postgresql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['db']}"
+    user = db_config['user']
+    password = db_config['password']
+    host = db_config['host']
+    port = db_config['port']
+    db = db_config['db']
+    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 DATABASE_URL = load_db_config()
 
