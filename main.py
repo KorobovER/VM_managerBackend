@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from datetime import timedelta
 from typing import List
 
-from db.database import engine, Base, get_db
+from db.database import engine, Base, get_db, SessionLocal
 from db.models import User, Server, VM, UserVM, JumpHost, RoleEnum
 from db.schemas import (
     UserCreate, UserResponse, Token, ServerCreate, ServerResponse,
