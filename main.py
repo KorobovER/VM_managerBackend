@@ -427,275 +427,6 @@ def start_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554),
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Proxy start error: {str(e)}")
 
-@app.post("/proxy/stop")
-def stop_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554), current_user: User = Depends(get_current_user)):
-    try:
-        proxy_stopped = stop_tcp_proxy(vm_ip, video_port)
-        
-        global video_tunnels
-        tunnel_key = f"{vm_ip}:{video_port}"
-        tunnel_stopped = False
-        
-        if tunnel_key in video_tunnels:
-            proc, _ = video_tunnels[tunnel_key]
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-            del video_tunnels[tunnel_key]
-            tunnel_stopped = True
-        
-        return {
-            "status": "stopped",
-            "vm_ip": vm_ip,
-            "video_port": video_port,
-            "proxy_stopped": proxy_stopped,
-            "tunnel_stopped": tunnel_stopped
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Proxy stop error: {str(e)}")
-
-@app.get("/proxy/status")
-def get_proxy_status(current_user: User = Depends(get_current_user)):
-    global tcp_proxies, video_tunnels
-    
-    proxies_info = []
-    for proxy_key, proxy_info in tcp_proxies.items():
-        vm_ip, video_port = proxy_key.split(':')
-        tunnel_key = f"{vm_ip}:{video_port}"
-        tunnel_active = tunnel_key in video_tunnels and video_tunnels[tunnel_key][0].poll() is None
-        
-        proxies_info.append({
-            "vm_ip": vm_ip,
-            "video_port": int(video_port),
-            "proxy_port": proxy_info["port"],
-            "proxy_active": proxy_info["active"],
-            "tunnel_active": tunnel_active,
-            "connection_address": f"sinthy.fvds.ru:{proxy_info['port']}"
-        })
-    
-    return {"active_proxies": proxies_info, "total": len(proxies_info)}
-
-@app.post("/video/connect")
-def connect_video_stream(vm_ip: str = Body(...), video_port: int = Body(default=55554), current_user: User = Depends(get_current_user)):
-    try:
-        local_port = create_video_tunnel(vm_ip, video_port)
-        return {
-            "status": "connected",
-            "vm_ip": vm_ip,
-            "video_port": video_port,
-            "local_port": local_port,
-            "connection_uri": f"127.0.0.1:{local_port}"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Video tunnel error: {str(e)}")
-
-@app.post("/video/disconnect")
-def disconnect_video_stream(vm_ip: str = Body(...), video_port: int = Body(default=55554), current_user: User = Depends(get_current_user)):
-    global video_tunnels
-    tunnel_key = f"{vm_ip}:{video_port}"
-    
-    if tunnel_key in video_tunnels:
-        proc, local_port = video_tunnels[tunnel_key]
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        del video_tunnels[tunnel_key]
-        return {"status": "disconnected", "vm_ip": vm_ip, "video_port": video_port}
-    else:
-        return {"status": "not_connected", "vm_ip": vm_ip, "video_port": video_port}
-
-@app.get("/video/status")
-def get_video_status(current_user: User = Depends(get_current_user)):
-    tunnels_info = []
-    for tunnel_key, (proc, local_port) in video_tunnels.items():
-        vm_ip, video_port = tunnel_key.split(':')
-        tunnels_info.append({
-            "vm_ip": vm_ip,
-            "video_port": int(video_port),
-            "local_port": local_port,
-            "active": proc.poll() is None
-        })
-    return {"active_tunnels": tunnels_info}
-
-@app.get("/video/stream")
-def video_stream(local_port: int = Query(default=9002), current_user: User = Depends(get_current_user)):
-    def generate_stream():
-        sock = None
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(30)
-            sock.connect(('127.0.0.1', local_port))
-            print(f"Connected to CrystalCloudServer on 127.0.0.1:{local_port}")
-            
-            chunk_count = 0
-            while True:
-                try:
-                    chunk = sock.recv(4096)
-                    if not chunk:
-                        print(f"Stream closed after {chunk_count} chunks")
-                        break
-                    chunk_count += 1
-                    if chunk_count == 1:
-                        print(f"First chunk received: {len(chunk)} bytes")
-                    if chunk_count % 100 == 0:
-                        print(f"Video stream: {chunk_count} chunks transmitted ({chunk_count * 4096 / 1024 / 1024:.2f} MB)")
-                    yield chunk
-                except socket.timeout:
-                    print(f"Stream timeout after {chunk_count} chunks")
-                    break
-        except Exception as e:
-            print(f"Stream error: {e}")
-        finally:
-            if sock:
-                sock.close()
-    
-    return StreamingResponse(
-        generate_stream(),
-        media_type="application/octet-stream"
-    )
-
-@app.get("/rdp/stream")
-def rdp_stream(local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default=""), current_user: User = Depends(get_current_user)):
-    def generate_rdp_stream():
-        proc = None
-        try:
-            cmd = [
-                "ffmpeg",
-                "-f", "gdigrab",
-                "-i", f"rdp://127.0.0.1:{local_port}",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-b:v", "2000k",
-                "-f", "h264",
-                "-"
-            ]
-            
-            print(f"Starting ffmpeg RDP stream from 127.0.0.1:{local_port}")
-            
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=4096
-            )
-            
-            chunk_count = 0
-            while True:
-                chunk = proc.stdout.read(4096)
-                if not chunk:
-                    print(f"RDP stream closed after {chunk_count} chunks")
-                    break
-                chunk_count += 1
-                if chunk_count == 1:
-                    print(f"First chunk received: {len(chunk)} bytes")
-                if chunk_count % 100 == 0:
-                    print(f"RDP stream: {chunk_count} chunks transmitted ({chunk_count * 4096 / 1024 / 1024:.2f} MB)")
-                yield chunk
-                
-        except FileNotFoundError:
-            print("ERROR: ffmpeg not found. Install with: sudo apt-get install ffmpeg")
-            yield b"ERROR: ffmpeg not installed\n"
-        except Exception as e:
-            print(f"RDP stream error: {e}")
-            yield f"ERROR: {str(e)}\n".encode()
-        finally:
-            if proc:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-    
-    return StreamingResponse(
-        generate_rdp_stream(),
-        media_type="video/h264"
-    )
-
-@app.get("/rdp/launch")
-def get_rdp_launch_url(vm_ip: str = Query(...), rdp_port: int = Query(default=3389), local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default=""), current_user: User = Depends(get_current_user)):
-    gcloud_url = f"gcloud://rdp?host=127.0.0.1&port={local_port}&vm_ip={vm_ip}&rdp_port={rdp_port}"
-    if username:
-        gcloud_url += f"&username={username}"
-    if password:
-        gcloud_url += f"&password={password}"
-    
-    return {
-        "protocol": "RDP",
-        "gcloud_url": gcloud_url,
-        "launch_link": f'<a href="{gcloud_url}">Подключиться к ВМ</a>',
-        "connection_string": f"mstsc /v:127.0.0.1:{local_port}",
-        "rdp_file_content": f"""full address:s:127.0.0.1:{local_port}
-username:s:{username}
-password:s:{password}
-domain:s:
-""",
-        "instructions": [
-            f"1. Открыть SSH туннель: ssh -o StrictHostKeyChecking=no -L {local_port}:{vm_ip}:{rdp_port} gate@212.192.123.3 -p 3003 -N",
-            f"2. Кликнуть на ссылку: {gcloud_url}",
-            f"3. Или подключиться вручную: mstsc /v:127.0.0.1:{local_port}"
-        ],
-        "tunnel_info": {
-            "vm_ip": vm_ip,
-            "rdp_port": rdp_port,
-            "local_port": local_port,
-            "ssh_command": f"ssh -o StrictHostKeyChecking=no -L {local_port}:{vm_ip}:{rdp_port} gate@212.192.123.3 -p 3003 -N"
-        }
-    }
-
-@app.get("/video/launch")
-def get_launch_url(vm_ip: str = Query(...), video_port: int = Query(default=55554), local_port: int = Query(default=9002), current_user: User = Depends(get_current_user)):
-    gcloud_url = f"gcloud://connect?host=127.0.0.1&port={local_port}&stream_url=http://sinthy.fvds.ru:9922/video/stream?local_port={local_port}"
-    
-    return {
-        "gcloud_url": gcloud_url,
-        "launch_link": f'<a href="{gcloud_url}">Запустить видеопоток</a>',
-        "instructions": "Кликни на ссылку выше или скопируй URL в адресную строку",
-        "tunnel_info": {
-            "vm_ip": vm_ip,
-            "video_port": video_port,
-            "local_port": local_port,
-            "stream_endpoint": f"http://sinthy.fvds.ru:9922/video/stream?local_port={local_port}"
-        }
-    }
-
-@app.get("/video/analyze")
-def analyze_video_stream(local_port: int = Query(default=9001), current_user: User = Depends(get_current_user)):
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(3)
-        sock.connect(('127.0.0.1', local_port))
-        
-        data = sock.recv(512)
-        sock.close()
-        
-        if not data:
-            return {"error": "No data received"}
-        
-        hex_data = data[:64].hex()
-        text_data = data.decode('utf-8', errors='ignore')[:200]
-        
-        analysis = {
-            "data_length": len(data),
-            "first_64_bytes_hex": hex_data,
-            "first_200_chars_text": text_data,
-            "detected_format": detect_format(data),
-            "tunnel_info": {
-                "local_port": local_port,
-                "note": "Используется готовый SSH туннель"
-            }
-        }
-        return analysis
-    except socket.timeout:
-        return {"error": f"Connection timeout on port {local_port} - check if SSH tunnel is running"}
-    except ConnectionRefusedError:
-        return {"error": f"Connection refused on port {local_port} - open SSH tunnel first"}
-    except Exception as e:
-        return {"error": str(e)}
-
 def detect_format(data: bytes) -> dict:
     result = {
         "is_http": False,
@@ -856,7 +587,7 @@ def start_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_c
         conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
         if conn is None:
             raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
-        domain = conn.lookupByName(vm_name)
+        domain = conn.lookupByName(request.vm_name)
         if domain is None:
             raise HTTPException(status_code=404, detail="ВМ не найдена.")
         domain.create()
@@ -865,7 +596,7 @@ def start_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_c
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
 
-    log = {"vm": vm_name, "action": "start", "status": status, "host": vm_host}
+    log = {"vm": request.vm_name, "action": "start", "status": status, "host": request.vm_host}
     return log
 
 @app.post("/vms/stop")
@@ -907,7 +638,7 @@ def stop_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_cu
         conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
         if conn is None:
             raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
-        domain = conn.lookupByName(vm_name)
+        domain = conn.lookupByName(request.vm_name)
         if domain is None:
             raise HTTPException(status_code=404, detail="ВМ не найдена.")
         domain.shutdown()
@@ -916,7 +647,7 @@ def stop_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_cu
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
 
-    log = {"vm": vm_name, "action": "stop", "status": status, "host": vm_host}
+    log = {"vm": request.vm_name, "action": "stop", "status": status, "host": request.vm_host}
     return log
 
 @app.get("/vms/running")
@@ -977,11 +708,11 @@ def force_stop_vm(request: VMActionRequest, current_user: User = Depends(get_cur
         conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
         if conn is None:
             raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
-        domain = conn.lookupByName(vm_name)
+        domain = conn.lookupByName(request.vm_name)
         if domain is None:
             raise HTTPException(status_code=404, detail="ВМ не найдена.")
         domain.destroy()
         conn.close()
-        return {"vm": vm_name, "action": "force_stop", "status": "forced_off", "host": vm_host}
+        return {"vm": request.vm_name, "action": "force_stop", "status": "forced_off", "host": request.vm_host}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
