@@ -533,7 +533,7 @@ def get_vms(host: str = Query(...), port: int = Query(default=16509), current_us
 
     cache_dir = "vms_cache"
     os.makedirs(cache_dir, exist_ok=True)
-    cache_filename = os.path.join(cache_dir, f"cached_vms_{vm}.yaml")
+    cache_filename = os.path.join(cache_dir, f"cached_vms_{host}.yaml")
     with open(cache_filename, 'w', encoding='utf-8') as cache_file:
         yaml.dump({"vms": vms}, cache_file, allow_unicode=True)
     return {"vms": vms}
