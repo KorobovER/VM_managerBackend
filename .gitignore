@@ -1,3 +1,5 @@
 __pycache__/
 vms_cache/
 venv/
+rdp_stream.bin
+video.bin
