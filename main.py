@@ -1,8 +1,10 @@
 import subprocess
 import yaml
-from fastapi import FastAPI, Request, HTTPException, Query, Body
-from fastapi.responses import JSONResponse
+import json
+from fastapi import FastAPI, HTTPException, Query, Body, Depends, status
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
 import psutil
 import time
 import libvirt
@@ -12,8 +14,24 @@ import atexit
 import socket
 import threading
 import select
+from sqlalchemy.orm import Session
+from datetime import timedelta
 
-app = FastAPI()
+from db.database import engine, Base, get_db
+from db.models import User, Server, VM, UserVM, JumpHost, RoleEnum
+from db.schemas import (
+    UserCreate, UserResponse, Token, ServerCreate, ServerResponse,
+    VMCreate, VMResponse, JumpHostCreate, JumpHostResponse,
+    VMHostParams, VMActionRequest
+)
+from auth import (
+    verify_password, get_password_hash, create_access_token,
+    get_current_user, get_current_admin_user, ACCESS_TOKEN_EXPIRE_MINUTES
+)
+
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="CloudGaming Backend")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,9 +41,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def load_config(path="config.yaml"):
+def load_config(path="config.json"):
     with open(path, 'r') as f:
-        return yaml.safe_load(f)
+        return json.load(f)
 
 config = load_config()
 
@@ -37,7 +55,13 @@ proxy_threads = {}
 def start_main_tunnel():
     global tunnel_process
     jump = config["jump_host"]
-    vm_host = config["vms"][0]
+    db = SessionLocal()
+    servers = db.query(Server).all()
+    db.close()
+    if not servers:
+        print("No servers found in database")
+        return
+    vm_host = {"host": servers[0].host, "port": servers[0].port}
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = vm_host.get("port", 16509)
     
@@ -67,7 +91,6 @@ def stop_main_tunnel():
             tunnel_process.kill()
 
 def get_available_local_port(start_port=9001):
-    import socket
     port = start_port
     while port < 10000:
         try:
@@ -122,7 +145,6 @@ def cleanup_video_tunnels():
     video_tunnels.clear()
 
 def tcp_relay_handler(client_socket, remote_host, remote_port, vm_ip, proxy_port):
-    """Перенаправляет TCP трафик между клиентом и удалённым хостом"""
     try:
         client_addr = client_socket.getpeername()
     except:
@@ -138,8 +160,6 @@ def tcp_relay_handler(client_socket, remote_host, remote_port, vm_ip, proxy_port
         
         client_socket.setblocking(False)
         remote_socket.setblocking(False)
-        
-        import select
         
         while True:
             try:
@@ -190,7 +210,6 @@ def tcp_relay_handler(client_socket, remote_host, remote_port, vm_ip, proxy_port
         print(f"[PROXY {vm_ip}:{proxy_port}] Client disconnected from {client_addr}")
 
 def start_tcp_proxy(vm_ip, video_port=55554):
-    """Запускает TCP proxy сервер для видеопотока"""
     global tcp_proxies, proxy_threads
     
     proxy_key = f"{vm_ip}:{video_port}"
@@ -201,11 +220,9 @@ def start_tcp_proxy(vm_ip, video_port=55554):
             print(f"[PROXY] Proxy already running for {proxy_key} on port {proxy_info['port']}")
             return proxy_info["port"]
     
-    # Создаём SSH туннель
     ssh_tunnel_port = create_video_tunnel(vm_ip, video_port)
     print(f"[PROXY] SSH tunnel created on port {ssh_tunnel_port}")
     
-    # Proxy слушает на отдельном порту
     local_tunnel_port = get_available_local_port(start_port=9002)
     
     proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -216,7 +233,6 @@ def start_tcp_proxy(vm_ip, video_port=55554):
     print(f"[PROXY] Started TCP proxy on 0.0.0.0:{local_tunnel_port} for {vm_ip}:{video_port}")
     
     def proxy_listener():
-        """Слушает входящие подключения и перенаправляет их"""
         print(f"[PROXY] Listener started for {proxy_key} on port {local_tunnel_port}")
         try:
             while tcp_proxies.get(proxy_key, {}).get("active", False):
@@ -260,7 +276,6 @@ def start_tcp_proxy(vm_ip, video_port=55554):
     return local_tunnel_port
 
 def stop_tcp_proxy(vm_ip, video_port=55554):
-    """Останавливает TCP proxy сервер"""
     global tcp_proxies, proxy_threads
     
     proxy_key = f"{vm_ip}:{video_port}"
@@ -285,7 +300,6 @@ def stop_tcp_proxy(vm_ip, video_port=55554):
     return False
 
 def cleanup_tcp_proxies():
-    """Очищает все TCP proxy при завершении"""
     global tcp_proxies
     for proxy_key in list(tcp_proxies.keys()):
         vm_ip, video_port = proxy_key.split(':')
@@ -305,17 +319,186 @@ atexit.register(stop_main_tunnel)
 atexit.register(cleanup_video_tunnels)
 atexit.register(cleanup_tcp_proxies)
 
+@app.post("/auth/register", response_model=UserResponse)
+def register(user: UserCreate, db: Session = Depends(get_db)):
+    db_user = db.query(User).filter(User.username == user.username).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    db_user = db.query(User).filter(User.email == user.email).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    hashed_password = get_password_hash(user.password)
+    db_user = User(
+        username=user.username,
+        email=user.email,
+        hashed_password=hashed_password,
+        role=user.role
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+@app.post("/auth/token", response_model=Token)
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/auth/me", response_model=UserResponse)
+def get_current_user_info(current_user: User = Depends(get_current_user)):
+    return current_user
+
+@app.post("/servers", response_model=ServerResponse)
+def create_server(
+    server: ServerCreate,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    db_server = Server(**server.dict())
+    db.add(db_server)
+    db.commit()
+    db.refresh(db_server)
+    return db_server
+
+@app.get("/servers", response_model=list[ServerResponse])
+def list_servers(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    servers = db.query(Server).all()
+    return servers
+
+@app.get("/servers/{server_id}", response_model=ServerResponse)
+def get_server(
+    server_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    server = db.query(Server).filter(Server.id == server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return server
+
+@app.post("/vms", response_model=VMResponse)
+def create_vm(
+    vm: VMCreate,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    server = db.query(Server).filter(Server.id == vm.server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    db_vm = VM(**vm.dict())
+    db.add(db_vm)
+    db.commit()
+    db.refresh(db_vm)
+    return db_vm
+
+@app.get("/vms", response_model=list[VMResponse])
+def list_vms(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    vms = db.query(VM).all()
+    return vms
+
+@app.post("/vms/{vm_id}/start")
+def start_vm(
+    vm_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    vm = db.query(VM).filter(VM.id == vm_id).first()
+    if not vm:
+        raise HTTPException(status_code=404, detail="VM not found")
+    
+    server = db.query(Server).filter(Server.id == vm.server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    jump = config["jump_host"]
+    LOCAL_PORT = config.get("local_tunnel_port", 14444)
+    REMOTE_LIBVIRT_PORT = server.port
+    
+    def tunnel_exists():
+        for proc in psutil.process_iter(attrs=['cmdline']):
+            if proc.info['cmdline'] is None:
+                continue
+            cmd = ' '.join(proc.info['cmdline'])
+            if f"-L {LOCAL_PORT}:{server.host}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd:
+                return True
+        return False
+    
+    if not tunnel_exists():
+        cmd = [
+            "ssh",
+            "-o", "StrictHostKeyChecking=no",
+            "-N", "-L", f"{LOCAL_PORT}:{server.host}:{REMOTE_LIBVIRT_PORT}",
+            f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+        ]
+        subprocess.Popen(cmd)
+        time.sleep(2)
+    
+    try:
+        conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
+        if conn is None:
+            raise HTTPException(status_code=500, detail="Failed to connect to libvirt")
+        domain = conn.lookupByName(vm.name)
+        if domain is None:
+            raise HTTPException(status_code=404, detail="VM not found on host")
+        domain.create()
+        conn.close()
+        return {"status": "started", "vm_id": vm_id, "vm_name": vm.name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
+
+@app.post("/vms/{vm_id}/stop")
+def stop_vm(
+    vm_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    vm = db.query(VM).filter(VM.id == vm_id).first()
+    if not vm:
+        raise HTTPException(status_code=404, detail="VM not found")
+    
+    server = db.query(Server).filter(Server.id == vm.server_id).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    jump = config["jump_host"]
+    LOCAL_PORT = config.get("local_tunnel_port", 14444)
+    REMOTE_LIBVIRT_PORT = server.port
+    
+    try:
+        conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
+        if conn is None:
+            raise HTTPException(status_code=500, detail="Failed to connect to libvirt")
+        domain = conn.lookupByName(vm.name)
+        if domain is None:
+            raise HTTPException(status_code=404, detail="VM not found on host")
+        domain.shutdown()
+        conn.close()
+        return {"status": "stopped", "vm_id": vm_id, "vm_name": vm.name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
+
 @app.post("/proxy/start")
-def start_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554)):
-    """
-    Запустить TCP proxy для видеопотока CrystalCloudeServer.
-    
-    Создаёт SSH туннель и TCP proxy сервер.
-    CrystalCloudeClient подключается к sinthy.fvds.ru:PORT
-    
-    vm_ip: IP адрес ВМ (внутри VMS Host)
-    video_port: порт видеопотока на ВМ (по умолчанию 55554)
-    """
+def start_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554), current_user: User = Depends(get_current_user)):
     try:
         proxy_key = f"{vm_ip}:{video_port}"
         
@@ -328,7 +511,6 @@ def start_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554))
                     "video_port": video_port,
                     "proxy_port": proxy_info["port"],
                     "connection_address": "sinthy.fvds.ru",
-                    "ssh_tunnel_port": proxy_info.get("ssh_tunnel_port", 9001),
                     "instructions": f"Connect CrystalCloudeClient to sinthy.fvds.ru:{proxy_info['port']}"
                 }
         
@@ -350,13 +532,7 @@ def start_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554))
         raise HTTPException(status_code=500, detail=f"Proxy start error: {str(e)}")
 
 @app.post("/proxy/stop")
-def stop_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554)):
-    """
-    Остановить TCP proxy для видеопотока.
-    
-    vm_ip: IP адрес ВМ
-    video_port: порт видеопотока на ВМ
-    """
+def stop_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554), current_user: User = Depends(get_current_user)):
     try:
         proxy_stopped = stop_tcp_proxy(vm_ip, video_port)
         
@@ -385,8 +561,7 @@ def stop_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554)):
         raise HTTPException(status_code=500, detail=f"Proxy stop error: {str(e)}")
 
 @app.get("/proxy/status")
-def get_proxy_status():
-    """Получить статус всех активных proxy серверов"""
+def get_proxy_status(current_user: User = Depends(get_current_user)):
     global tcp_proxies, video_tunnels
     
     proxies_info = []
@@ -407,13 +582,7 @@ def get_proxy_status():
     return {"active_proxies": proxies_info, "total": len(proxies_info)}
 
 @app.post("/video/connect")
-def connect_video_stream(vm_ip: str = Body(...), video_port: int = Body(default=55554)):
-    """
-    Создать SSH туннель для видеопотока CrystalCloudeServer.
-    
-    vm_ip: IP адрес ВМ (внутри VMS Host)
-    video_port: порт видеопотока на ВМ (по умолчанию 55554 для CrystalCloudeServer)
-    """
+def connect_video_stream(vm_ip: str = Body(...), video_port: int = Body(default=55554), current_user: User = Depends(get_current_user)):
     try:
         local_port = create_video_tunnel(vm_ip, video_port)
         return {
@@ -427,13 +596,7 @@ def connect_video_stream(vm_ip: str = Body(...), video_port: int = Body(default=
         raise HTTPException(status_code=500, detail=f"Video tunnel error: {str(e)}")
 
 @app.post("/video/disconnect")
-def disconnect_video_stream(vm_ip: str = Body(...), video_port: int = Body(default=55554)):
-    """
-    Закрыть SSH туннель видеопотока.
-    
-    vm_ip: IP адрес ВМ
-    video_port: порт видеопотока на ВМ
-    """
+def disconnect_video_stream(vm_ip: str = Body(...), video_port: int = Body(default=55554), current_user: User = Depends(get_current_user)):
     global video_tunnels
     tunnel_key = f"{vm_ip}:{video_port}"
     
@@ -450,8 +613,7 @@ def disconnect_video_stream(vm_ip: str = Body(...), video_port: int = Body(defau
         return {"status": "not_connected", "vm_ip": vm_ip, "video_port": video_port}
 
 @app.get("/video/status")
-def get_video_status():
-    """Получить статус всех активных видеопотоков"""
+def get_video_status(current_user: User = Depends(get_current_user)):
     tunnels_info = []
     for tunnel_key, (proc, local_port) in video_tunnels.items():
         vm_ip, video_port = tunnel_key.split(':')
@@ -464,11 +626,7 @@ def get_video_status():
     return {"active_tunnels": tunnels_info}
 
 @app.get("/video/stream")
-def video_stream(local_port: int = Query(default=9002)):
-    """Получить видеопоток от CrystalCloudeServer и передать клиенту"""
-    import socket
-    from fastapi.responses import StreamingResponse
-    
+def video_stream(local_port: int = Query(default=9002), current_user: User = Depends(get_current_user)):
     def generate_stream():
         sock = None
         try:
@@ -505,24 +663,19 @@ def video_stream(local_port: int = Query(default=9002)):
     )
 
 @app.get("/rdp/stream")
-def rdp_stream(local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default="")):
-    """Получить видеопоток с RDP сессии через ffmpeg"""
-    import subprocess
-    from fastapi.responses import StreamingResponse
-    
+def rdp_stream(local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default=""), current_user: User = Depends(get_current_user)):
     def generate_rdp_stream():
         proc = None
         try:
-            # Команда для запуска ffmpeg с подключением к RDP
             cmd = [
                 "ffmpeg",
-                "-f", "gdigrab",  # Захват экрана Windows
-                "-i", f"rdp://127.0.0.1:{local_port}",  # Источник RDP
-                "-c:v", "libx264",  # Кодек видео
-                "-preset", "ultrafast",  # Скорость кодирования
-                "-b:v", "2000k",  # Битрейт
-                "-f", "h264",  # Формат вывода
-                "-"  # Вывод в stdout
+                "-f", "gdigrab",
+                "-i", f"rdp://127.0.0.1:{local_port}",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-b:v", "2000k",
+                "-f", "h264",
+                "-"
             ]
             
             print(f"Starting ffmpeg RDP stream from 127.0.0.1:{local_port}")
@@ -567,10 +720,7 @@ def rdp_stream(local_port: int = Query(default=33188), username: str = Query(def
     )
 
 @app.get("/rdp/launch")
-def get_rdp_launch_url(vm_ip: str = Query(...), rdp_port: int = Query(default=3389), local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default="")):
-    """Получить gcloud URL для запуска в gci-launcher"""
-    
-    # Генерировать gcloud URL для gci-launcher
+def get_rdp_launch_url(vm_ip: str = Query(...), rdp_port: int = Query(default=3389), local_port: int = Query(default=33188), username: str = Query(default=""), password: str = Query(default=""), current_user: User = Depends(get_current_user)):
     gcloud_url = f"gcloud://rdp?host=127.0.0.1&port={local_port}&vm_ip={vm_ip}&rdp_port={rdp_port}"
     if username:
         gcloud_url += f"&username={username}"
@@ -601,10 +751,7 @@ domain:s:
     }
 
 @app.get("/video/launch")
-def get_launch_url(vm_ip: str = Query(...), video_port: int = Query(default=55554), local_port: int = Query(default=9002)):
-    """Получить gcloud:// URL для запуска в gcl-launcher"""
-    import urllib.parse
-    
+def get_launch_url(vm_ip: str = Query(...), video_port: int = Query(default=55554), local_port: int = Query(default=9002), current_user: User = Depends(get_current_user)):
     gcloud_url = f"gcloud://connect?host=127.0.0.1&port={local_port}&stream_url=http://sinthy.fvds.ru:9922/video/stream?local_port={local_port}"
     
     return {
@@ -620,9 +767,7 @@ def get_launch_url(vm_ip: str = Query(...), video_port: int = Query(default=5555
     }
 
 @app.get("/video/analyze")
-def analyze_video_stream(local_port: int = Query(default=9001)):
-    """Анализировать формат видеопотока CrystalCloudeServer через готовый туннель"""
-    import socket
+def analyze_video_stream(local_port: int = Query(default=9001), current_user: User = Depends(get_current_user)):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(3)
@@ -656,7 +801,6 @@ def analyze_video_stream(local_port: int = Query(default=9001)):
         return {"error": str(e)}
 
 def detect_format(data: bytes) -> dict:
-    """Определить формат видеопотока"""
     result = {
         "is_http": False,
         "is_websocket": False,
@@ -693,16 +837,14 @@ def detect_format(data: bytes) -> dict:
     return result
 
 @app.get("/vms/list")
-def list_vm_hosts():
-    return {"vms": [v["name"] for v in config["vms"]]}
+def list_vm_hosts(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    servers = db.query(Server).all()
+    return {"vms": [s.name for s in servers]}
 
 @app.get("/vms/available")
-def get_vms(vm: str = Query(..., description="VM name")):
+def get_vms(host: str = Query(...), port: int = Query(default=16509), current_user: User = Depends(get_current_user)):
     jump = config["jump_host"]
-    vm_hosts = {v["name"]: v for v in config["vms"]}
-    if vm not in vm_hosts:
-        raise HTTPException(status_code=404, detail="VM host not found")
-    vm_host = vm_hosts[vm]
+    vm_host = {"host": host, "port": port}
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = vm_host.get("port", 16509)
 
@@ -762,7 +904,6 @@ def get_vms(vm: str = Query(..., description="VM name")):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
 
-    # Кэшируем в YAML
     cache_dir = "vms_cache"
     os.makedirs(cache_dir, exist_ok=True)
     cache_filename = os.path.join(cache_dir, f"cached_vms_{vm}.yaml")
@@ -771,7 +912,7 @@ def get_vms(vm: str = Query(..., description="VM name")):
     return {"vms": vms}
 
 @app.get("/vms/cached")
-def get_cached_vms(vm: str):
+def get_cached_vms(vm: str, current_user: User = Depends(get_current_user)):
     cache_dir = "vms_cache"
     cache_filename = os.path.join(cache_dir, f"cached_vms_{vm}.yaml")
     if not os.path.exists(cache_filename):
@@ -781,12 +922,9 @@ def get_cached_vms(vm: str):
     return data
 
 @app.post("/vms/start")
-def start_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
+def start_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_current_user)):
     jump = config["jump_host"]
-    vm_hosts = {v["name"]: v for v in config["vms"]}
-    if vm_host not in vm_hosts:
-        raise HTTPException(status_code=404, detail="VM host not found")
-    host = vm_hosts[vm_host]
+    host = {"host": request.host, "port": request.port}
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = host.get("port", 16509)
 
@@ -835,12 +973,9 @@ def start_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
     return log
 
 @app.post("/vms/stop")
-def stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
+def stop_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_current_user)):
     jump = config["jump_host"]
-    vm_hosts = {v["name"]: v for v in config["vms"]}
-    if vm_host not in vm_hosts:
-        raise HTTPException(status_code=404, detail="VM host not found")
-    host = vm_hosts[vm_host]
+    host = {"host": request.host, "port": request.port}
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = host.get("port", 16509)
 
@@ -889,12 +1024,9 @@ def stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
     return log
 
 @app.get("/vms/running")
-def get_running_vms(vm: str = Query(..., description="VM name")):
+def get_running_vms(host: str = Query(...), port: int = Query(default=16509), current_user: User = Depends(get_current_user)):
     jump = config["jump_host"]
-    vm_hosts = {v["name"]: v for v in config["vms"]}
-    if vm not in vm_hosts:
-        raise HTTPException(status_code=404, detail="VM host not found")
-    vm_host = vm_hosts[vm]
+    vm_host = {"host": host, "port": port}
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = vm_host.get("port", 16509)
 
@@ -911,13 +1043,9 @@ def get_running_vms(vm: str = Query(..., description="VM name")):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/vms/force_stop")
-def force_stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
-    import time as time_mod
+def force_stop_vm(request: VMActionRequest, current_user: User = Depends(get_current_user)):
     jump = config["jump_host"]
-    vm_hosts = {v["name"]: v for v in config["vms"]}
-    if vm_host not in vm_hosts:
-        raise HTTPException(status_code=404, detail="VM host not found")
-    host = vm_hosts[vm_host]
+    host = {"host": request.host, "port": request.port}
     LOCAL_PORT = config.get("local_tunnel_port", 14444)
     REMOTE_LIBVIRT_PORT = host.get("port", 16509)
 
@@ -947,7 +1075,7 @@ def force_stop_vm(vm_host: str = Body(...), vm_name: str = Body(...)):
                 f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
             ]
         subprocess.Popen(cmd)
-        time_mod.sleep(2)
+        time.sleep(2)
 
     try:
         conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
