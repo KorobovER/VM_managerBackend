@@ -13,8 +13,8 @@ def load_db_config():
     password = db_config['password']
     host = db_config['host']
     port = db_config['port']
-    db = db_config['db']
-    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+    database = db_config['db']
+    return f"postgresql://{user}:{password}@{host}:{port}/{database}"
 
 DATABASE_URL = load_db_config()
 
