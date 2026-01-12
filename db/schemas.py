@@ -47,6 +47,14 @@ class VMCreate(BaseModel):
     name: str
     server_id: int
     ip_address: str
+    rdp_port: int = 3389
+    video_port: int = 55554
+
+class VMResponse(BaseModel):
+    id: int
+    name: str
+    server_id: int
+    ip_address: str
     rdp_port: int
     video_port: int
     created_at: datetime
@@ -55,6 +63,13 @@ class VMCreate(BaseModel):
         from_attributes = True
 
 class JumpHostCreate(BaseModel):
+    name: str
+    host: str
+    port: int = 22
+    user: str
+
+class JumpHostResponse(BaseModel):
+    id: int
     name: str
     host: str
     port: int
