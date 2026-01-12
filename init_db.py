@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from db.database import engine, Base, SessionLocal
 from db.models import User, Server, JumpHost, RoleEnum
 from auth import get_password_hash
