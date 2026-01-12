@@ -16,6 +16,7 @@ import threading
 import select
 from sqlalchemy.orm import Session
 from datetime import timedelta
+from typing import List
 
 from db.database import engine, Base, get_db
 from db.models import User, Server, VM, UserVM, JumpHost, RoleEnum
@@ -373,7 +374,7 @@ def create_server(
     db.refresh(db_server)
     return db_server
 
-@app.get("/servers", response_model=list[ServerResponse])
+@app.get("/servers", response_model=List[ServerResponse])
 def list_servers(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -408,7 +409,7 @@ def create_vm(
     db.refresh(db_vm)
     return db_vm
 
-@app.get("/vms", response_model=list[VMResponse])
+@app.get("/vms", response_model=List[VMResponse])
 def list_vms(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
