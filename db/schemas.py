@@ -11,6 +11,7 @@ class UserCreate(BaseModel):
     username: str
     email: str
     password: str
+    role: RoleEnum = RoleEnum.user
 
 class UserResponse(BaseModel):
     id: int
