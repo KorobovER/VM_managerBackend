@@ -400,6 +400,8 @@ def update_server(
     current_user: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
+    from sqlalchemy.exc import IntegrityError
+    
     server = db.query(Server).filter(Server.id == server_id, Server.deleted == 0).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
@@ -414,9 +416,14 @@ def update_server(
     for field, value in update_data.items():
         setattr(server, field, value)
     
-    db.add(server)
-    db.commit()
-    db.refresh(server)
+    try:
+        db.add(server)
+        db.commit()
+        db.refresh(server)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Server with this name already exists")
+    
     return server
 
 @app.delete("/servers/{server_id}")
