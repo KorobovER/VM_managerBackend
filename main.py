@@ -405,6 +405,12 @@ def update_server(
         raise HTTPException(status_code=404, detail="Server not found")
     
     update_data = server_update.dict(exclude_unset=True)
+    
+    if "name" in update_data and update_data["name"] != server.name:
+        existing_server = db.query(Server).filter(Server.name == update_data["name"], Server.deleted == 0).first()
+        if existing_server:
+            raise HTTPException(status_code=400, detail="Server with this name already exists")
+    
     for field, value in update_data.items():
         setattr(server, field, value)
     
