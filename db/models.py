@@ -30,7 +30,7 @@ class Server(Base):
     port = Column(Integer, default=16509)
     user = Column(String)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+    deleted = Column(Integer, default=0)
     vms = relationship("VM", back_populates="server")
 
 class VM(Base):

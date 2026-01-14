@@ -33,6 +33,12 @@ class ServerCreate(BaseModel):
     port: int = 16509
     user: str
 
+class ServerUpdate(BaseModel):
+    name: Optional[str] = None
+    host: Optional[str] = None
+    port: Optional[int] = None
+    user: Optional[str] = None
+
 class ServerResponse(BaseModel):
     id: int
     name: str

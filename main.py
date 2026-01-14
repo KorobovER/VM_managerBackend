@@ -21,7 +21,7 @@ from typing import List
 from db.database import engine, Base, get_db, SessionLocal
 from db.models import User, Server, VM, UserVM, JumpHost, RoleEnum
 from db.schemas import (
-    UserCreate, UserResponse, Token, ServerCreate, ServerResponse,
+    UserCreate, UserResponse, Token, ServerCreate, ServerResponse, ServerUpdate,
     VMCreate, VMResponse, JumpHostCreate, JumpHostResponse,
     VMHostParams, VMActionRequest
 )
@@ -379,7 +379,7 @@ def list_servers(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    servers = db.query(Server).all()
+    servers = db.query(Server).filter(Server.deleted == 0).all()
     return servers
 
 @app.get("/servers/{server_id}", response_model=ServerResponse)
@@ -388,10 +388,45 @@ def get_server(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    server = db.query(Server).filter(Server.id == server_id).first()
+    server = db.query(Server).filter(Server.id == server_id, Server.deleted == 0).first()
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
     return server
+
+@app.put("/servers/{server_id}", response_model=ServerResponse)
+def update_server(
+    server_id: int,
+    server_update: ServerUpdate,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    server = db.query(Server).filter(Server.id == server_id, Server.deleted == 0).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    update_data = server_update.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(server, field, value)
+    
+    db.add(server)
+    db.commit()
+    db.refresh(server)
+    return server
+
+@app.delete("/servers/{server_id}")
+def delete_server(
+    server_id: int,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    server = db.query(Server).filter(Server.id == server_id, Server.deleted == 0).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    server.deleted = 1
+    db.add(server)
+    db.commit()
+    return {"message": "Server deleted successfully"}
 
 @app.post("/proxy/start")
 def start_proxy(vm_ip: str = Query(...), video_port: int = Query(default=55554), current_user: User = Depends(get_current_user)):
