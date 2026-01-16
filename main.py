@@ -611,8 +611,8 @@ def list_servers(
         }
         servers_with_ping.append(server_dict)
     
-    # Сортируем по пингу (меньше пинг = выше в списке)
-    servers_with_ping.sort(key=lambda x: x['ping'])
+    # Сортируем по пингу (меньше пинг = выше в списке), недоступные (-1) в конец
+    servers_with_ping.sort(key=lambda x: (x['ping'] < 0, x['ping']))
     
     print(f"[SERVER SORT] Sorted servers by ping:")
     for i, server in enumerate(servers_with_ping):
