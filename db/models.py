@@ -29,9 +29,12 @@ class Server(Base):
     host = Column(String)
     port = Column(Integer, default=16509)
     user = Column(String)
+    jump_host_id = Column(Integer, ForeignKey("jump_hosts.id"), nullable=True)
+    local_tunnel_port = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     deleted = Column(Integer, default=0)
     vms = relationship("VM", back_populates="server")
+    jump_host = relationship("JumpHost")
 
 class VM(Base):
     __tablename__ = "vms"

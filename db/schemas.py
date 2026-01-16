@@ -32,12 +32,14 @@ class ServerCreate(BaseModel):
     host: str
     port: int = 16509
     user: str
+    jump_host_id: Optional[int] = None
 
 class ServerUpdate(BaseModel):
     name: Optional[str] = None
     host: Optional[str] = None
     port: Optional[int] = None
     user: Optional[str] = None
+    jump_host_id: Optional[int] = None
 
 class ServerResponse(BaseModel):
     id: int
@@ -45,6 +47,8 @@ class ServerResponse(BaseModel):
     host: str
     port: int
     user: str
+    jump_host_id: Optional[int] = None
+    local_tunnel_port: Optional[int] = None
     created_at: datetime
 
     class Config:

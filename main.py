@@ -49,47 +49,125 @@ def load_config(path="config.json"):
 config = load_config()
 
 tunnel_process = None
+server_tunnels = {}
 video_tunnels = {}
 tcp_proxies = {}
 proxy_threads = {}
 
-def start_main_tunnel():
-    global tunnel_process
-    jump = config["jump_host"]
-    db = SessionLocal()
-    servers = db.query(Server).all()
-    db.close()
-    if not servers:
-        print("No servers found in database")
-        return
-    vm_host = {"host": servers[0].host, "port": servers[0].port}
-    LOCAL_PORT = config.get("local_tunnel_port", 14444)
-    REMOTE_LIBVIRT_PORT = vm_host.get("port", 16509)
-    
+def get_available_local_port_from(start_port=14440):
+    port = start_port
+    while port < 15000:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind(('127.0.0.1', port))
+            sock.close()
+            return port
+        except OSError:
+            port += 1
+    raise Exception("No available ports found")
+
+def tunnel_exists(local_port, remote_host, remote_port, jump_host_info):
     for proc in psutil.process_iter(attrs=['cmdline']):
         if proc.info['cmdline'] is None:
             continue
         cmd = ' '.join(proc.info['cmdline'])
-        if f"-L {LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd:
-            return
+        if (f"-L {local_port}:{remote_host}:{remote_port}" in cmd and 
+            jump_host_info['host'] in cmd):
+            return True
+    return False
+
+def start_server_tunnel(server_id, server_host, server_port, jump_host_info):
+    global server_tunnels
+    
+    tunnel_key = f"server_{server_id}"
+    
+    if tunnel_key in server_tunnels:
+        proc, local_port = server_tunnels[tunnel_key]
+        if proc.poll() is None:
+            return local_port
+        else:
+            del server_tunnels[tunnel_key]
+    
+    if tunnel_exists(14440 + server_id, server_host, server_port, jump_host_info):
+        local_port = 14440 + server_id
+        server_tunnels[tunnel_key] = (None, local_port)
+        return local_port
+    
+    local_port = 14440 + server_id
     
     cmd = [
         "ssh",
         "-o", "StrictHostKeyChecking=no",
-        "-N", "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
-        f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
+        "-N", "-L", f"{local_port}:{server_host}:{server_port}",
+        f"{jump_host_info['user']}@{jump_host_info['host']}", "-p", str(jump_host_info['port'])
     ]
-    tunnel_process = subprocess.Popen(cmd)
+    
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     time.sleep(2)
+    
+    if proc.poll() is not None:
+        stderr = proc.stderr.read().decode() if proc.stderr else ""
+        raise Exception(f"SSH tunnel for server {server_id} failed: {stderr}")
+    
+    server_tunnels[tunnel_key] = (proc, local_port)
+    return local_port
+
+def start_all_server_tunnels():
+    db = SessionLocal()
+    servers = db.query(Server).filter(Server.deleted == 0, Server.jump_host_id != None).all()
+    
+    for server in servers:
+        try:
+            if server.jump_host:
+                jump_info = {
+                    'host': server.jump_host.host,
+                    'port': server.jump_host.port,
+                    'user': server.jump_host.user
+                }
+                local_port = start_server_tunnel(server.id, server.host, server.port, jump_info)
+                server.local_tunnel_port = local_port
+                db.add(server)
+        except Exception as e:
+            print(f"Failed to start tunnel for server {server.name}: {e}")
+    
+    db.commit()
+    db.close()
+
+def stop_all_server_tunnels():
+    global server_tunnels
+    for tunnel_key, (proc, _) in server_tunnels.items():
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    server_tunnels.clear()
+
+def start_main_tunnel():
+    start_all_server_tunnels()
 
 def stop_main_tunnel():
-    global tunnel_process
-    if tunnel_process:
-        tunnel_process.terminate()
-        try:
-            tunnel_process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            tunnel_process.kill()
+    stop_all_server_tunnels()
+
+def get_libvirt_connection(server):
+    """
+    Получить подключение к libvirt для сервера.
+    Если jump_host_id указан - использует туннель, иначе прямое подключение.
+    """
+    if server.jump_host_id is not None and server.jump_host:
+        local_port = 14440 + server.id
+        conn_uri = f"qemu+tcp://127.0.0.1:{local_port}/system"
+    else:
+        conn_uri = f"qemu+tcp://{server.host}:{server.port}/system"
+    
+    try:
+        conn = libvirt.open(conn_uri)
+        if conn is None:
+            raise Exception(f"Failed to connect to {conn_uri}")
+        return conn
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Libvirt connection error: {e}")
 
 def get_available_local_port(start_port=9001):
     port = start_port
@@ -517,44 +595,14 @@ def list_vm_hosts(current_user: User = Depends(get_current_user), db: Session = 
     return {"vms": [s.name for s in servers]}
 
 @app.get("/vms/available")
-def get_vms(host: str = Query(...), port: int = Query(default=16509), current_user: User = Depends(get_current_user)):
-    jump = config["jump_host"]
-    vm_host = {"host": host, "port": port}
-    LOCAL_PORT = config.get("local_tunnel_port", 14444)
-    REMOTE_LIBVIRT_PORT = vm_host.get("port", 16509)
-
-    def tunnel_exists():
-        for proc in psutil.process_iter(attrs=['cmdline']):
-            if proc.info['cmdline'] is None:
-                continue
-            cmd = ' '.join(proc.info['cmdline'])
-            if f"-L {LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd and jump['user'] in cmd:
-                return True
-        return False
-
-    if not tunnel_exists():
-        if shutil.which("sshpass") and jump.get("password"):
-            cmd = [
-                "sshpass", "-p", jump["password"],
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-N", "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
-                f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
-            ]
-        else:
-            cmd = [
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-L", f"{LOCAL_PORT}:{vm_host['host']}:{REMOTE_LIBVIRT_PORT}",
-                f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-            ]
-        subprocess.Popen(cmd)
-        time.sleep(2)
-
+def get_vms(host: str = Query(...), port: int = Query(default=16509), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    server = db.query(Server).filter(Server.host == host, Server.port == port).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    conn = get_libvirt_connection(server)
+    
     try:
-        conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
-        if conn is None:
-            raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
         all_domains = conn.listAllDomains(0)
         state_map = {
             libvirt.VIR_DOMAIN_NOSTATE: "nostate",
@@ -597,44 +645,14 @@ def get_cached_vms(vm: str, current_user: User = Depends(get_current_user)):
     return data
 
 @app.post("/vms/start")
-def start_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_current_user)):
-    jump = config["jump_host"]
-    host = {"host": request.host, "port": request.port}
-    LOCAL_PORT = config.get("local_tunnel_port", 14444)
-    REMOTE_LIBVIRT_PORT = host.get("port", 16509)
-
-    def tunnel_exists():
-        for proc in psutil.process_iter(attrs=['cmdline']):
-            if proc.info['cmdline'] is None:
-                continue
-            cmd = ' '.join(proc.info['cmdline'])
-            if f"-L {LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd and jump['user'] in cmd:
-                return True
-        return False
-
-    if not tunnel_exists():
-        if shutil.which("sshpass") and jump.get("password"):
-            cmd = [
-                "sshpass", "-p", jump["password"],
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-N", "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-                f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
-            ]
-        else:
-            cmd = [
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-                f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-            ]
-        subprocess.Popen(cmd)
-        time.sleep(2)
-
+def start_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    server = db.query(Server).filter(Server.host == request.host, Server.port == request.port).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    conn = get_libvirt_connection(server)
+    
     try:
-        conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
-        if conn is None:
-            raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
         domain = conn.lookupByName(request.vm_name)
         if domain is None:
             raise HTTPException(status_code=404, detail="ВМ не найдена.")
@@ -648,44 +666,14 @@ def start_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_c
     return log
 
 @app.post("/vms/stop")
-def stop_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_current_user)):
-    jump = config["jump_host"]
-    host = {"host": request.host, "port": request.port}
-    LOCAL_PORT = config.get("local_tunnel_port", 14444)
-    REMOTE_LIBVIRT_PORT = host.get("port", 16509)
-
-    def tunnel_exists():
-        for proc in psutil.process_iter(attrs=['cmdline']):
-            if proc.info['cmdline'] is None:
-                continue
-            cmd = ' '.join(proc.info['cmdline'])
-            if f"-L {LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd and jump['user'] in cmd:
-                return True
-        return False
-
-    if not tunnel_exists():
-        if shutil.which("sshpass") and jump.get("password"):
-            cmd = [
-                "sshpass", "-p", jump["password"],
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-N", "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-                f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
-            ]
-        else:
-            cmd = [
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-                f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-            ]
-        subprocess.Popen(cmd)
-        time.sleep(2)
-
+def stop_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    server = db.query(Server).filter(Server.host == request.host, Server.port == request.port).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    conn = get_libvirt_connection(server)
+    
     try:
-        conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
-        if conn is None:
-            raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
         domain = conn.lookupByName(request.vm_name)
         if domain is None:
             raise HTTPException(status_code=404, detail="ВМ не найдена.")
@@ -699,14 +687,14 @@ def stop_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_cu
     return log
 
 @app.get("/vms/running")
-def get_running_vms(host: str = Query(...), port: int = Query(default=16509), current_user: User = Depends(get_current_user)):
-    jump = config["jump_host"]
-    vm_host = {"host": host, "port": port}
-    LOCAL_PORT = config.get("local_tunnel_port", 14444)
-    REMOTE_LIBVIRT_PORT = vm_host.get("port", 16509)
+def get_running_vms(host: str = Query(...), port: int = Query(default=16509), current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    server = db.query(Server).filter(Server.host == host, Server.port == port).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    conn = get_libvirt_connection(server)
 
     try:
-        conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
         ids = conn.listDomainsID()
         running = []
         for id in ids:
@@ -718,44 +706,14 @@ def get_running_vms(host: str = Query(...), port: int = Query(default=16509), cu
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/vms/force_stop")
-def force_stop_vm(request: VMActionRequest, current_user: User = Depends(get_current_user)):
-    jump = config["jump_host"]
-    host = {"host": request.host, "port": request.port}
-    LOCAL_PORT = config.get("local_tunnel_port", 14444)
-    REMOTE_LIBVIRT_PORT = host.get("port", 16509)
-
-    def tunnel_exists():
-        for proc in psutil.process_iter(attrs=['cmdline']):
-            if proc.info['cmdline'] is None:
-                continue
-            cmd = ' '.join(proc.info['cmdline'])
-            if f"-L {LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}" in cmd and jump['host'] in cmd and jump['user'] in cmd:
-                return True
-        return False
-
-    if not tunnel_exists():
-        if shutil.which("sshpass") and jump.get("password"):
-            cmd = [
-                "sshpass", "-p", jump["password"],
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-N", "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-                f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
-            ]
-        else:
-            cmd = [
-                "ssh",
-                "-o", "StrictHostKeyChecking=no",
-                "-L", f"{LOCAL_PORT}:{host['host']}:{REMOTE_LIBVIRT_PORT}",
-                f"{jump['user']}@{jump['host']}", "-p", str(jump['port']), "-N"
-            ]
-        subprocess.Popen(cmd)
-        time.sleep(2)
-
+def force_stop_vm(request: VMActionRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    server = db.query(Server).filter(Server.host == request.host, Server.port == request.port).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    conn = get_libvirt_connection(server)
+    
     try:
-        conn = libvirt.open(f"qemu+tcp://127.0.0.1:{LOCAL_PORT}/system")
-        if conn is None:
-            raise HTTPException(status_code=500, detail="Не удалось подключиться к libvirt через туннель.")
         domain = conn.lookupByName(request.vm_name)
         if domain is None:
             raise HTTPException(status_code=404, detail="ВМ не найдена.")
