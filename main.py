@@ -270,6 +270,17 @@ def get_libvirt_connection(server):
     if server.jump_host_id is not None and server.jump_host:
         local_port = 14440 + server.id
         conn_uri = f"qemu+tcp://127.0.0.1:{local_port}/system"
+        
+        # Проверяем и восстанавливаем туннель при необходимости
+        tunnel_key = f"server_{server.id}"
+        if tunnel_key not in server_tunnels:
+            jump_info = {
+                'host': server.jump_host.host,
+                'port': server.jump_host.port,
+                'user': server.jump_host.user
+            }
+            print(f"[LIBVIRT] Tunnel missing for server {server.name}, creating...")
+            start_server_tunnel(server.id, server.host, server.port, jump_info)
     else:
         conn_uri = f"qemu+tcp://{server.host}:{server.port}/system"
     
