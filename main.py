@@ -17,6 +17,7 @@ import select
 from sqlalchemy.orm import Session
 from datetime import timedelta
 from typing import List
+import platform
 
 from db.database import engine, Base, get_db, SessionLocal
 from db.models import User, Server, VM, UserVM, JumpHost, RoleEnum
@@ -47,6 +48,45 @@ def load_config(path="config.json"):
         return json.load(f)
 
 config = load_config()
+
+def ping_server(host: str, port: int = None, jump_host_info: dict = None) -> float:
+    """
+    Измеряет пинг до сервера.
+    Для серверов с jump_host измеряет пинг до jump host.
+    Возвращает время в миллисекундах или -1 если недоступен.
+    """
+    try:
+        target_host = jump_host_info['host'] if jump_host_info else host
+        
+        if platform.system().lower() == "windows":
+            cmd = ["ping", "-n", "1", "-w", "1000", target_host]
+        else:
+            cmd = ["ping", "-c", "1", "-W", "1", target_host]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        
+        if result.returncode == 0:
+            if platform.system().lower() == "windows":
+                # Windows: "time=1ms" или "time<1ms"
+                import re
+                match = re.search(r'time[=<](\d+)ms', result.stdout)
+                if match:
+                    return float(match.group(1))
+                else:
+                    # Если time<1ms, считаем как 0.5
+                    if "time<1ms" in result.stdout:
+                        return 0.5
+            else:
+                # Linux/Unix: "time=1.234 ms"
+                import re
+                match = re.search(r'time=(\d+\.?\d*)\s*ms', result.stdout)
+                if match:
+                    return float(match.group(1))
+        
+        return -1.0  # Сервер недоступен
+    except Exception as e:
+        print(f"Ping error for {target_host}: {e}")
+        return -1.0
 
 tunnel_process = None
 server_tunnels = {}
@@ -466,7 +506,38 @@ def list_servers(
     db: Session = Depends(get_db)
 ):
     servers = db.query(Server).filter(Server.deleted == 0).all()
-    return servers
+    
+    # Измеряем пинг для каждого сервера
+    servers_with_ping = []
+    for server in servers:
+        jump_host_info = None
+        if server.jump_host:
+            jump_host_info = {
+                'host': server.jump_host.host,
+                'port': server.jump_host.port,
+                'user': server.jump_host.user
+            }
+        
+        ping = ping_server(server.host, server.port, jump_host_info)
+        
+        # Создаем словарь с данными сервера и пингом
+        server_dict = {
+            'id': server.id,
+            'name': server.name,
+            'host': server.host,
+            'port': server.port,
+            'user': server.user,
+            'jump_host_id': server.jump_host_id,
+            'local_tunnel_port': server.local_tunnel_port,
+            'created_at': server.created_at,
+            'ping': ping
+        }
+        servers_with_ping.append(server_dict)
+    
+    # Сортируем по пингу (меньше пинг = выше в списке)
+    servers_with_ping.sort(key=lambda x: x['ping'])
+    
+    return servers_with_ping
 
 @app.get("/servers/{server_id}", response_model=ServerResponse)
 def get_server(

@@ -50,6 +50,7 @@ class ServerResponse(BaseModel):
     jump_host_id: Optional[int] = None
     local_tunnel_port: Optional[int] = None
     created_at: datetime
+    ping: float = -1.0
 
     class Config:
         from_attributes = True
