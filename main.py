@@ -506,6 +506,7 @@ def list_servers(
     db: Session = Depends(get_db)
 ):
     servers = db.query(Server).filter(Server.deleted == 0).all()
+    print(f"[SERVER SORT] Found {len(servers)} servers")
     
     # Измеряем пинг для каждого сервера
     servers_with_ping = []
@@ -519,6 +520,7 @@ def list_servers(
             }
         
         ping = ping_server(server.host, server.port, jump_host_info)
+        print(f"[SERVER SORT] Server '{server.name}' ({server.host}) - ping: {ping}ms")
         
         # Создаем словарь с данными сервера и пингом
         server_dict = {
@@ -536,6 +538,11 @@ def list_servers(
     
     # Сортируем по пингу (меньше пинг = выше в списке)
     servers_with_ping.sort(key=lambda x: x['ping'])
+    
+    print(f"[SERVER SORT] Sorted servers by ping:")
+    for i, server in enumerate(servers_with_ping):
+        status = "✓" if server['ping'] > 0 else "✗"
+        print(f"[SERVER SORT] {i+1}. {server['name']} - {server['ping']}ms {status}")
     
     return servers_with_ping
 
