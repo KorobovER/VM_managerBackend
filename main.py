@@ -52,46 +52,112 @@ config = load_config()
 def ping_server(host: str, port: int = None, jump_host_info: dict = None) -> float:
     """
     Измеряет пинг до сервера.
-    Для серверов с jump_host измеряет пинг до jump host.
+    Для серверов с jump_host проверяет доступность TCP порта SSH.
+    Если jump host недоступен, пробует пинговать сервер напрямую.
     Возвращает время в миллисекундах или -1 если недоступен.
     """
     try:
-        target_host = jump_host_info['host'] if jump_host_info else host
-        
-        if platform.system().lower() == "windows":
-            cmd = ["ping", "-n", "1", "-w", "1000", target_host]
-        else:
-            cmd = ["ping", "-c", "1", "-W", "1", target_host]
-        
-        print(f"[PING] Pinging {target_host} with command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
-        
-        print(f"[PING] Return code: {result.returncode}")
-        print(f"[PING] Stdout: {result.stdout}")
-        if result.stderr:
-            print(f"[PING] Stderr: {result.stderr}")
-        
-        if result.returncode == 0:
-            if platform.system().lower() == "windows":
-                # Windows: "time=1ms" или "time<1ms"
-                import re
-                match = re.search(r'time[=<](\d+)ms', result.stdout)
-                if match:
-                    return float(match.group(1))
+        if jump_host_info:
+            # Для серверов с jump host проверяем доступность SSH порта
+            target_host = jump_host_info['host']
+            target_port = jump_host_info['port']
+            
+            print(f"[PING] Checking TCP connection to {target_host}:{target_port} (SSH)")
+            
+            start_time = time.time()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(3)
+            
+            try:
+                result = sock.connect_ex((target_host, target_port))
+                end_time = time.time()
+                sock.close()
+                
+                if result == 0:
+                    ping_ms = (end_time - start_time) * 1000
+                    print(f"[PING] TCP connection successful: {ping_ms:.2f}ms")
+                    return ping_ms
                 else:
-                    # Если time<1ms, считаем как 0.5
-                    if "time<1ms" in result.stdout:
-                        return 0.5
+                    print(f"[PING] TCP connection failed: error code {result}")
+            except Exception as e:
+                print(f"[PING] TCP connection error: {e}")
+            
+            # Если TCP не удался, пробуем ping напрямую к серверу
+            print(f"[PING] TCP to jump host failed, trying direct ping to {host}")
+            
+            if platform.system().lower() == "windows":
+                cmd = ["ping", "-n", "1", "-w", "1000", host]
             else:
-                # Linux/Unix: "time=1.234 ms"
-                import re
-                match = re.search(r'time=(\d+\.?\d*)\s*ms', result.stdout)
-                if match:
-                    return float(match.group(1))
+                cmd = ["ping", "-c", "1", "-W", "1", host]
+            
+            print(f"[PING] Pinging {host} directly with command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            
+            print(f"[PING] Direct ping return code: {result.returncode}")
+            print(f"[PING] Direct ping stdout: {result.stdout}")
+            if result.stderr:
+                print(f"[PING] Direct ping stderr: {result.stderr}")
+            
+            if result.returncode == 0:
+                if platform.system().lower() == "windows":
+                    import re
+                    match = re.search(r'time[=<](\d+)ms', result.stdout)
+                    if match:
+                        ping_value = float(match.group(1))
+                        print(f"[PING] Direct ping successful: {ping_value}ms")
+                        return ping_value
+                    else:
+                        if "time<1ms" in result.stdout:
+                            print(f"[PING] Direct ping successful: <1ms (counted as 0.5ms)")
+                            return 0.5
+                else:
+                    import re
+                    match = re.search(r'time=(\d+\.?\d*)\s*ms', result.stdout)
+                    if match:
+                        ping_value = float(match.group(1))
+                        print(f"[PING] Direct ping successful: {ping_value}ms")
+                        return ping_value
+        else:
+            # Для серверов без jump host используем обычный ping
+            target_host = host
+            
+            if platform.system().lower() == "windows":
+                cmd = ["ping", "-n", "1", "-w", "1000", target_host]
+            else:
+                cmd = ["ping", "-c", "1", "-W", "1", target_host]
+            
+            print(f"[PING] Pinging {target_host} with command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            
+            print(f"[PING] Return code: {result.returncode}")
+            print(f"[PING] Stdout: {result.stdout}")
+            if result.stderr:
+                print(f"[PING] Stderr: {result.stderr}")
+            
+            if result.returncode == 0:
+                if platform.system().lower() == "windows":
+                    import re
+                    match = re.search(r'time[=<](\d+)ms', result.stdout)
+                    if match:
+                        ping_value = float(match.group(1))
+                        print(f"[PING] Ping successful: {ping_value}ms")
+                        return ping_value
+                    else:
+                        if "time<1ms" in result.stdout:
+                            print(f"[PING] Ping successful: <1ms (counted as 0.5ms)")
+                            return 0.5
+                else:
+                    import re
+                    match = re.search(r'time=(\d+\.?\d*)\s*ms', result.stdout)
+                    if match:
+                        ping_value = float(match.group(1))
+                        print(f"[PING] Ping successful: {ping_value}ms")
+                        return ping_value
         
+        print(f"[PING] All connectivity checks failed for {host}")
         return -1.0  # Сервер недоступен
     except Exception as e:
-        print(f"[PING] Error for {target_host}: {e}")
+        print(f"[PING] Error for {host}: {e}")
         return -1.0
 
 tunnel_process = None
