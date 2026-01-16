@@ -100,3 +100,31 @@ class VMActionRequest(BaseModel):
     vm_name: str
     host: str
     port: int = 16509
+
+class UserVMCreate(BaseModel):
+    user_id: int
+    vm_name: str
+    server_host: str
+    server_port: int = 16509
+
+class UserVMResponse(BaseModel):
+    id: int
+    user_id: int
+    vm_name: str
+    server_host: str
+    server_port: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class UserWithVMsResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    role: str
+    is_active: bool
+    vms: List[VMResponse] = []
+
+    class Config:
+        from_attributes = True

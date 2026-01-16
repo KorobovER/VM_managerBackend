@@ -24,7 +24,7 @@ from db.models import User, Server, VM, UserVM, JumpHost, RoleEnum
 from db.schemas import (
     UserCreate, UserResponse, Token, ServerCreate, ServerResponse, ServerUpdate,
     VMCreate, VMResponse, JumpHostCreate, JumpHostResponse,
-    VMHostParams, VMActionRequest
+    VMHostParams, VMActionRequest, UserVMCreate, UserVMResponse, UserWithVMsResponse
 )
 from auth import (
     verify_password, get_password_hash, create_access_token,
@@ -775,16 +775,32 @@ def get_vms(host: str = Query(...), port: int = Query(default=16509), current_us
             libvirt.VIR_DOMAIN_CRASHED: "crashed",
             libvirt.VIR_DOMAIN_PMSUSPENDED: "pmsuspended"
         }
-        vms = []
+        
+        # Получаем все ВМ из libvirt
+        libvirt_vms = []
         for dom in all_domains:
             state_code, _ = dom.state()
             state = state_map.get(state_code, "unknown")
-            vms.append({
+            libvirt_vms.append({
                 "name": dom.name(),
                 "id": dom.ID(),
                 "state": state
             })
         conn.close()
+        
+        # Получаем назначенные ВМ из базы данных для этого сервера
+        assigned_vm_names = db.query(UserVM.vm_name).filter(
+            UserVM.server_host == host,
+            UserVM.server_port == port
+        ).all()
+        assigned_vm_names = [name[0] for name in assigned_vm_names]
+        
+        # Фильтруем доступные ВМ
+        available_vms = []
+        for vm in libvirt_vms:
+            if vm["name"] not in assigned_vm_names:
+                available_vms.append(vm)
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
 
@@ -792,8 +808,8 @@ def get_vms(host: str = Query(...), port: int = Query(default=16509), current_us
     os.makedirs(cache_dir, exist_ok=True)
     cache_filename = os.path.join(cache_dir, f"cached_vms_{host}.yaml")
     with open(cache_filename, 'w', encoding='utf-8') as cache_file:
-        yaml.dump({"vms": vms}, cache_file, allow_unicode=True)
-    return {"vms": vms}
+        yaml.dump({"vms": available_vms}, cache_file, allow_unicode=True)
+    return {"vms": available_vms}
 
 @app.get("/vms/cached")
 def get_cached_vms(vm: str, current_user: User = Depends(get_current_user)):
@@ -883,3 +899,170 @@ def force_stop_vm(request: VMActionRequest, current_user: User = Depends(get_cur
         return {"vm": request.vm_name, "action": "force_stop", "status": "forced_off", "host": request.vm_host}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
+
+@app.post("/admin/assign-vm", response_model=UserVMResponse)
+def assign_vm_to_user(
+    assignment: UserVMCreate,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == assignment.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    existing_assignment = db.query(UserVM).filter(
+        UserVM.user_id == assignment.user_id,
+        UserVM.vm_name == assignment.vm_name,
+        UserVM.server_host == assignment.server_host,
+        UserVM.server_port == assignment.server_port
+    ).first()
+    
+    if existing_assignment:
+        raise HTTPException(status_code=400, detail="VM already assigned to this user")
+    
+    user_vm = UserVM(
+        user_id=assignment.user_id,
+        vm_name=assignment.vm_name,
+        server_host=assignment.server_host,
+        server_port=assignment.server_port
+    )
+    db.add(user_vm)
+    db.commit()
+    db.refresh(user_vm)
+    
+    return user_vm
+
+@app.delete("/admin/assign-vm")
+def remove_vm_assignment(
+    user_id: int = Query(...),
+    vm_name: str = Query(...),
+    server_host: str = Query(...),
+    server_port: int = Query(default=16509),
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    assignment = db.query(UserVM).filter(
+        UserVM.user_id == user_id,
+        UserVM.vm_name == vm_name,
+        UserVM.server_host == server_host,
+        UserVM.server_port == server_port
+    ).first()
+    
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Assignment not found")
+    
+    db.delete(assignment)
+    db.commit()
+    
+    return {"message": "VM assignment removed successfully"}
+
+@app.get("/users/{user_id}/vms")
+def get_user_vms(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Получаем назначения ВМ для пользователя
+    user_vms = db.query(UserVM).filter(UserVM.user_id == user_id).all()
+    
+    result = []
+    for user_vm in user_vms:
+        # Получаем сервер для ВМ
+        server = db.query(Server).filter(
+            Server.host == user_vm.server_host,
+            Server.port == user_vm.server_port
+        ).first()
+        
+        if server:
+            try:
+                # Получаем ВМ с сервера
+                conn = get_libvirt_connection(server)
+                domain = conn.lookupByName(user_vm.vm_name)
+                if domain:
+                    state_code, _ = domain.state()
+                    state_map = {
+                        libvirt.VIR_DOMAIN_NOSTATE: "nostate",
+                        libvirt.VIR_DOMAIN_RUNNING: "running",
+                        libvirt.VIR_DOMAIN_BLOCKED: "blocked",
+                        libvirt.VIR_DOMAIN_PAUSED: "paused",
+                        libvirt.VIR_DOMAIN_SHUTDOWN: "shutdown",
+                        libvirt.VIR_DOMAIN_SHUTOFF: "shutoff",
+                        libvirt.VIR_DOMAIN_CRASHED: "crashed",
+                        libvirt.VIR_DOMAIN_PMSUSPENDED: "pmsuspended"
+                    }
+                    state = state_map.get(state_code, "unknown")
+                    
+                    result.append({
+                        "name": user_vm.vm_name,
+                        "server_host": user_vm.server_host,
+                        "server_port": user_vm.server_port,
+                        "state": state,
+                        "assigned_at": user_vm.created_at.isoformat()
+                    })
+                conn.close()
+            except Exception as e:
+                print(f"Error getting VM {user_vm.vm_name}: {e}")
+                continue
+    
+    return {"user": user.username, "vms": result}
+
+@app.get("/users/me/vms")
+def get_my_vms(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Получаем назначения ВМ для текущего пользователя
+    user_vms = db.query(UserVM).filter(UserVM.user_id == current_user.id).all()
+    
+    result = []
+    for user_vm in user_vms:
+        # Получаем сервер для ВМ
+        server = db.query(Server).filter(
+            Server.host == user_vm.server_host,
+            Server.port == user_vm.server_port
+        ).first()
+        
+        if server:
+            try:
+                # Получаем ВМ с сервера
+                conn = get_libvirt_connection(server)
+                domain = conn.lookupByName(user_vm.vm_name)
+                if domain:
+                    state_code, _ = domain.state()
+                    state_map = {
+                        libvirt.VIR_DOMAIN_NOSTATE: "nostate",
+                        libvirt.VIR_DOMAIN_RUNNING: "running",
+                        libvirt.VIR_DOMAIN_BLOCKED: "blocked",
+                        libvirt.VIR_DOMAIN_PAUSED: "paused",
+                        libvirt.VIR_DOMAIN_SHUTDOWN: "shutdown",
+                        libvirt.VIR_DOMAIN_SHUTOFF: "shutoff",
+                        libvirt.VIR_DOMAIN_CRASHED: "crashed",
+                        libvirt.VIR_DOMAIN_PMSUSPENDED: "pmsuspended"
+                    }
+                    state = state_map.get(state_code, "unknown")
+                    
+                    result.append({
+                        "name": user_vm.vm_name,
+                        "server_host": user_vm.server_host,
+                        "server_port": user_vm.server_port,
+                        "state": state,
+                        "assigned_at": user_vm.created_at.isoformat()
+                    })
+                conn.close()
+            except Exception as e:
+                print(f"Error getting VM {user_vm.vm_name}: {e}")
+                continue
+    
+    return {"user": current_user.username, "vms": result}
+
+@app.get("/admin/vms/assignments", response_model=List[UserVMResponse])
+def get_all_vm_assignments(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    assignments = db.query(UserVM).all()
+    return assignments

@@ -48,18 +48,18 @@ class VM(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     server = relationship("Server", back_populates="vms")
-    user_vms = relationship("UserVM", back_populates="vm")
 
 class UserVM(Base):
     __tablename__ = "user_vms"
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    vm_id = Column(Integer, ForeignKey("vms.id"))
+    vm_name = Column(String)  # Храним имя ВМ, а не ID
+    server_host = Column(String)  # Храним хост сервера для идентификации
+    server_port = Column(Integer, default=16509)  # Храним порт сервера
     created_at = Column(DateTime, default=datetime.utcnow)
     
     user = relationship("User", back_populates="vms")
-    vm = relationship("VM", back_populates="user_vms")
 
 class JumpHost(Base):
     __tablename__ = "jump_hosts"
