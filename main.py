@@ -1066,3 +1066,11 @@ def get_all_vm_assignments(
 ):
     assignments = db.query(UserVM).all()
     return assignments
+
+@app.get("/admin/users", response_model=List[UserResponse])
+def get_all_users(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    users = db.query(User).all()
+    return users
