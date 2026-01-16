@@ -777,29 +777,16 @@ def get_vms(host: str = Query(...), port: int = Query(default=16509), current_us
         }
         
         # Получаем все ВМ из libvirt
-        libvirt_vms = []
+        vms = []
         for dom in all_domains:
             state_code, _ = dom.state()
             state = state_map.get(state_code, "unknown")
-            libvirt_vms.append({
+            vms.append({
                 "name": dom.name(),
                 "id": dom.ID(),
                 "state": state
             })
         conn.close()
-        
-        # Получаем назначенные ВМ из базы данных для этого сервера
-        assigned_vm_names = db.query(UserVM.vm_name).filter(
-            UserVM.server_host == host,
-            UserVM.server_port == port
-        ).all()
-        assigned_vm_names = [name[0] for name in assigned_vm_names]
-        
-        # Фильтруем доступные ВМ
-        available_vms = []
-        for vm in libvirt_vms:
-            if vm["name"] not in assigned_vm_names:
-                available_vms.append(vm)
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Libvirt error: {e}")
@@ -808,8 +795,8 @@ def get_vms(host: str = Query(...), port: int = Query(default=16509), current_us
     os.makedirs(cache_dir, exist_ok=True)
     cache_filename = os.path.join(cache_dir, f"cached_vms_{host}.yaml")
     with open(cache_filename, 'w', encoding='utf-8') as cache_file:
-        yaml.dump({"vms": available_vms}, cache_file, allow_unicode=True)
-    return {"vms": available_vms}
+        yaml.dump({"vms": vms}, cache_file, allow_unicode=True)
+    return {"vms": vms}
 
 @app.get("/vms/cached")
 def get_cached_vms(vm: str, current_user: User = Depends(get_current_user)):
