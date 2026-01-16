@@ -440,6 +440,14 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 def get_current_user_info(current_user: User = Depends(get_current_user)):
     return current_user
 
+@app.get("/jump-hosts", response_model=List[JumpHostResponse])
+def list_jump_hosts(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    jump_hosts = db.query(JumpHost).all()
+    return jump_hosts
+
 @app.post("/servers", response_model=ServerResponse)
 def create_server(
     server: ServerCreate,
