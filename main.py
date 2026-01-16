@@ -63,7 +63,13 @@ def ping_server(host: str, port: int = None, jump_host_info: dict = None) -> flo
         else:
             cmd = ["ping", "-c", "1", "-W", "1", target_host]
         
+        print(f"[PING] Pinging {target_host} with command: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+        
+        print(f"[PING] Return code: {result.returncode}")
+        print(f"[PING] Stdout: {result.stdout}")
+        if result.stderr:
+            print(f"[PING] Stderr: {result.stderr}")
         
         if result.returncode == 0:
             if platform.system().lower() == "windows":
@@ -85,7 +91,7 @@ def ping_server(host: str, port: int = None, jump_host_info: dict = None) -> flo
         
         return -1.0  # Сервер недоступен
     except Exception as e:
-        print(f"Ping error for {target_host}: {e}")
+        print(f"[PING] Error for {target_host}: {e}")
         return -1.0
 
 tunnel_process = None
@@ -518,6 +524,9 @@ def list_servers(
                 'port': server.jump_host.port,
                 'user': server.jump_host.user
             }
+            print(f"[SERVER SORT] Server '{server.name}' has jump host: {server.jump_host.host}")
+        else:
+            print(f"[SERVER SORT] Server '{server.name}' has no jump host, pinging directly")
         
         ping = ping_server(server.host, server.port, jump_host_info)
         print(f"[SERVER SORT] Server '{server.name}' ({server.host}) - ping: {ping}ms")
