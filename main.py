@@ -710,7 +710,8 @@ def run_winrm_command(vm_ip, command, jump_host_info=None):
 def start_application_on_vm(vm_ip, app_path, jump_host_info=None):
     """Запускает приложение на ВМ"""
     # Проверяем, что приложение существует
-    check_cmd = f'dir {app_path.replace("/", "\\")}'
+    app_path_windows = app_path.replace("/", "\\")
+    check_cmd = f'dir {app_path_windows}'
     check_result = run_winrm_command(vm_ip, check_cmd, jump_host_info)
     
     if not check_result['success']:
@@ -720,7 +721,7 @@ def start_application_on_vm(vm_ip, app_path, jump_host_info=None):
     print(f"[APP] Application found, starting...")
     
     # Запуск приложения через PowerShell
-    start_cmd = f'powershell -Command "Start-Process \'{app_path.replace("/", "\\")}\' -NoNewWindow"'
+    start_cmd = f'powershell -Command "Start-Process \'{app_path_windows}\' -NoNewWindow"'
     
     result = run_winrm_command(vm_ip, start_cmd, jump_host_info)
     
