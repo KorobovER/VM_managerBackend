@@ -1071,81 +1071,6 @@ def start_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_c
     log = {"vm": request.vm_name, "action": "start", "status": status, "host": request.vm_host}
     return log
 
-@app.post("/vms/start-with-app")
-def start_vm_with_app(
-    vm_name: str = Query(...),
-    host: str = Query(...), 
-    port: int = Query(default=16509),
-    app_path: str = Query(default="C:\\CloudServer\\CrystalCloudServer.exe"),
-    current_user: User = Depends(get_current_user), 
-    db: Session = Depends(get_db)
-):
-    """Запускает ВМ и автоматически запускает приложение"""
-    server = db.query(Server).filter(Server.host == host, Server.port == port).first()
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
-    
-    # Получаем jump host информацию
-    jump_host_info = None
-    if server.jump_host:
-        jump_host_info = {
-            'host': server.jump_host.host,
-            'port': server.jump_host.port,
-            'user': server.jump_host.user
-        }
-    
-    # Запускаем ВМ
-    conn = get_libvirt_connection(server)
-    
-    try:
-        domain = conn.lookupByName(vm_name)
-        if domain is None:
-            raise HTTPException(status_code=404, detail="ВМ не найдена.")
-        
-        # Проверяем текущее состояние
-        state_code, _ = domain.state()
-        if state_code == libvirt.VIR_DOMAIN_RUNNING:
-            print(f"[VM] VM {vm_name} is already running")
-            vm_running = True
-        else:
-            domain.create()
-            vm_running = False
-            print(f"[VM] Starting VM {vm_name}...")
-        
-        conn.close()
-        
-        # Получаем IP ВМ из конфигурации или DHCP
-        # Для примера используем IP из jump host конфигурации
-        # В реальном коде нужно получить IP из libvirt или других источников
-        if jump_host_info:
-            # Используем IP из диапазона ВМ для этого сервера
-            vm_ip = "172.20.1.196"  # Заменить на реальный IP ВМ win-10
-        else:
-            vm_ip = host  # Если нет jump host, используем IP сервера
-        
-        if not vm_running:
-            # Ожидаем загрузки ВМ
-            print(f"[VM] Waiting for VM {vm_name} to boot...")
-            if not wait_for_vm_ready(vm_ip, jump_host_info, timeout=300):
-                raise HTTPException(status_code=500, detail="VM failed to boot within timeout")
-        
-        # Запускаем приложение
-        print(f"[APP] Starting application {app_path} on VM {vm_name}")
-        app_started = start_application_on_vm(vm_ip, app_path, jump_host_info)
-        
-        return {
-            "vm": vm_name,
-            "action": "start_with_app",
-            "vm_status": "running",
-            "app_started": app_started,
-            "app_path": app_path,
-            "vm_ip": vm_ip,
-            "host": host
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {e}")
-
 @app.post("/vms/start-app")
 def start_app_on_vm(
     vm_ip: str = Query(...),
@@ -1167,32 +1092,6 @@ def start_app_on_vm(
         "app_started": app_started,
         "app_path": app_path
     }
-
-@app.get("/vms/test-winrm")
-def test_winrm_connection(
-    vm_ip: str = Query(...),
-    current_user: User = Depends(get_current_user)
-):
-    """Тестирует WinRM подключение к ВМ"""
-    jump_host_info = None
-    if "jump_host" in config:
-        jump_host_info = config["jump_host"]
-    
-    try:
-        result = run_winrm_command(vm_ip, 'whoami', jump_host_info)
-        return {
-            "vm_ip": vm_ip,
-            "connection_success": result['success'],
-            "stdout": result['stdout'],
-            "stderr": result['stderr'],
-            "status_code": result['status_code']
-        }
-    except Exception as e:
-        return {
-            "vm_ip": vm_ip,
-            "connection_success": False,
-            "error": str(e)
-        }
 
 @app.post("/vms/stop")
 def stop_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
