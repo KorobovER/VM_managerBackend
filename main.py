@@ -1076,7 +1076,7 @@ def start_vm_with_app(
     vm_name: str = Query(...),
     host: str = Query(...), 
     port: int = Query(default=16509),
-    app_path: str = Query(default="C:\\CrystalServer\\CrystalCloudeServer.exe"),
+    app_path: str = Query(default="C:\\CloudServer\\CrystalClodeServer.exe"),
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
@@ -1114,9 +1114,14 @@ def start_vm_with_app(
         
         conn.close()
         
-        # Получаем IP ВМ (для примера используем IP из имени или конфигурации)
-        # В реальном коде нужно получить IP из DHCP или других источников
-        vm_ip = "172.20.1.196"  # Заменить на реальный IP ВМ
+        # Получаем IP ВМ из конфигурации или DHCP
+        # Для примера используем IP из jump host конфигурации
+        # В реальном коде нужно получить IP из libvirt или других источников
+        if jump_host_info:
+            # Используем IP из диапазона ВМ для этого сервера
+            vm_ip = "172.20.1.196"  # Заменить на реальный IP ВМ win-10
+        else:
+            vm_ip = host  # Если нет jump host, используем IP сервера
         
         if not vm_running:
             # Ожидаем загрузки ВМ
@@ -1144,7 +1149,7 @@ def start_vm_with_app(
 @app.post("/vms/start-app")
 def start_app_on_vm(
     vm_ip: str = Query(...),
-    app_path: str = Query(default="C:\\CrystalServer\\CrystalCloudeServer.exe"),
+    app_path: str = Query(default="C:\\CloudServer\\CrystalClodeServer.exe"),
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
