@@ -1076,7 +1076,7 @@ def start_vm_with_app(
     vm_name: str = Query(...),
     host: str = Query(...), 
     port: int = Query(default=16509),
-    app_path: str = Query(default="C:\\CloudServer\\CrystalClodeServer.exe"),
+    app_path: str = Query(default="C:\\CloudServer\\CrystalCloudeServer.exe"),
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
@@ -1149,7 +1149,7 @@ def start_vm_with_app(
 @app.post("/vms/start-app")
 def start_app_on_vm(
     vm_ip: str = Query(...),
-    app_path: str = Query(default="C:\\CloudServer\\CrystalClodeServer.exe"),
+    app_path: str = Query(default="C:\\CloudeServer\\CrystalCloudeServer.exe"),
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
