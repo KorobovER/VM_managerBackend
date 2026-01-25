@@ -163,6 +163,7 @@ def ping_server(host: str, port: int = None, jump_host_info: dict = None) -> flo
 tunnel_process = None
 server_tunnels = {}
 video_tunnels = {}
+winrm_tunnels = {}
 tcp_proxies = {}
 proxy_threads = {}
 
@@ -188,24 +189,68 @@ def tunnel_exists(local_port, remote_host, remote_port, jump_host_info):
             return True
     return False
 
+def server_tunnel_exists(server_id, server_host, server_port, jump_host_info):
+    """Проверяет, существует ли ЛЮБОЙ туннель до указанного сервера"""
+    for proc in psutil.process_iter(attrs=['cmdline']):
+        if proc.info['cmdline'] is None:
+            continue
+        cmd = ' '.join(proc.info['cmdline'])
+        # Ищем любой туннель до этого сервера с этим jump host
+        if (f"{server_host}:{server_port}" in cmd and 
+            jump_host_info['host'] in cmd and
+            "ssh" in cmd):
+            return True, proc
+    return False, None
+
+def get_existing_server_tunnel(server_id, server_host, server_port, jump_host_info):
+    """Возвращает локальный порт существующего туннеля до сервера"""
+    for proc in psutil.process_iter(attrs=['cmdline']):
+        if proc.info['cmdline'] is None:
+            continue
+        cmd = ' '.join(proc.info['cmdline'])
+        
+        # Ищем туннель к нужному серверу
+        if (f"{server_host}:{server_port}" in cmd and 
+            jump_host_info['host'] in cmd and
+            "ssh" in cmd and "-L" in cmd):
+            
+            # Извлекаем локальный порт из команды
+            import re
+            match = re.search(r'-L\s+(\d+):' + re.escape(server_host) + ':' + re.escape(server_port), cmd)
+            if match:
+                local_port = int(match.group(1))
+                print(f"[TUNNEL] Found existing tunnel for server {server_id}: localhost:{local_port} -> {server_host}:{server_port}")
+                return local_port, proc
+    
+    return None, None
+
 def start_server_tunnel(server_id, server_host, server_port, jump_host_info):
     global server_tunnels
     
     tunnel_key = f"server_{server_id}"
     
+    # Проверяем, есть ли уже активный туннель в нашем кеше
     if tunnel_key in server_tunnels:
         proc, local_port = server_tunnels[tunnel_key]
-        if proc.poll() is None:
+        if proc and proc.poll() is None:
+            print(f"[TUNNEL] Using cached tunnel for server {server_id}: localhost:{local_port}")
             return local_port
         else:
+            print(f"[TUNNEL] Cached tunnel for server {server_id} is dead, removing...")
             del server_tunnels[tunnel_key]
     
-    if tunnel_exists(14440 + server_id, server_host, server_port, jump_host_info):
-        local_port = 14440 + server_id
-        server_tunnels[tunnel_key] = (None, local_port)
-        return local_port
+    # Проверяем, существует ли туннель в системе
+    existing_port, existing_proc = get_existing_server_tunnel(server_id, server_host, server_port, jump_host_info)
+    if existing_port:
+        # Туннель уже существует, используем его
+        server_tunnels[tunnel_key] = (existing_proc, existing_port)
+        print(f"[TUNNEL] Using existing system tunnel for server {server_id}: localhost:{existing_port}")
+        return existing_port
     
+    # Создаем новый туннель
     local_port = 14440 + server_id
+    
+    print(f"[TUNNEL] Creating new tunnel for server {server_id}: localhost:{local_port} -> {server_host}:{server_port}")
     
     cmd = [
         "ssh",
@@ -222,6 +267,7 @@ def start_server_tunnel(server_id, server_host, server_port, jump_host_info):
         raise Exception(f"SSH tunnel for server {server_id} failed: {stderr}")
     
     server_tunnels[tunnel_key] = (proc, local_port)
+    print(f"[TUNNEL] Successfully created tunnel for server {server_id}: localhost:{local_port}")
     return local_port
 
 def start_all_server_tunnels():
@@ -245,6 +291,102 @@ def start_all_server_tunnels():
     db.commit()
     db.close()
 
+def start_winrm_tunnel(vm_ip, jump_host_info):
+    """Создает туннель для WinRM (порт 5985)"""
+    global winrm_tunnels
+    
+    tunnel_key = f"winrm_{vm_ip}"
+    
+    # Проверяем, есть ли уже активный туннель в нашем кеше
+    if tunnel_key in winrm_tunnels:
+        proc, local_port = winrm_tunnels[tunnel_key]
+        if proc and proc.poll() is None:
+            print(f"[WINRM] Using cached tunnel for {vm_ip}: localhost:{local_port}")
+            return local_port
+        else:
+            print(f"[WINRM] Cached tunnel for {vm_ip} is dead, removing...")
+            del winrm_tunnels[tunnel_key]
+    
+    # Проверяем, существует ли туннель в системе
+    existing_port, existing_proc = get_existing_server_tunnel(f"winrm_{vm_ip}", vm_ip, "5985", jump_host_info)
+    if existing_port:
+        # Туннель уже существует, используем его
+        winrm_tunnels[tunnel_key] = (existing_proc, existing_port)
+        print(f"[WINRM] Using existing system tunnel for {vm_ip}: localhost:{existing_port}")
+        return existing_port
+    
+    # Создаем новый туннель
+    local_port = 15985  # Базовый порт для WinRM
+    
+    print(f"[WINRM] Creating new tunnel for {vm_ip}: localhost:{local_port} -> {vm_ip}:5985")
+    
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-N", "-L", f"{local_port}:{vm_ip}:5985",
+        f"{jump_host_info['user']}@{jump_host_info['host']}", "-p", str(jump_host_info['port'])
+    ]
+    
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(2)
+    
+    if proc.poll() is not None:
+        stderr = proc.stderr.read().decode() if proc.stderr else ""
+        raise Exception(f"SSH WinRM tunnel for {vm_ip} failed: {stderr}")
+    
+    winrm_tunnels[tunnel_key] = (proc, local_port)
+    print(f"[WINRM] Successfully created tunnel for {vm_ip}: localhost:{local_port}")
+    return local_port
+
+def stop_winrm_tunnels():
+    """Останавливает все WinRM туннели"""
+    global winrm_tunnels
+    for tunnel_key, (proc, _) in winrm_tunnels.items():
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    winrm_tunnels.clear()
+
+def list_all_tunnels():
+    """Отладочная функция: показывает все активные туннели"""
+    print("\n=== ACTIVE TUNNELS ===")
+    
+    # Server tunnels
+    print("\nServer tunnels:")
+    for tunnel_key, (proc, port) in server_tunnels.items():
+        status = "alive" if (proc and proc.poll() is None) else "dead"
+        print(f"  {tunnel_key}: localhost:{port} ({status})")
+    
+    # WinRM tunnels
+    print("\nWinRM tunnels:")
+    for tunnel_key, (proc, port) in winrm_tunnels.items():
+        status = "alive" if (proc and proc.poll() is None) else "dead"
+        print(f"  {tunnel_key}: localhost:{port} ({status})")
+    
+    # Video tunnels
+    print("\nVideo tunnels:")
+    for tunnel_key, (proc, port) in video_tunnels.items():
+        status = "alive" if (proc and proc.poll() is None) else "dead"
+        print(f"  {tunnel_key}: localhost:{port} ({status})")
+    
+    # System processes
+    print("\nSSH processes in system:")
+    ssh_processes = []
+    for proc in psutil.process_iter(attrs=['cmdline']):
+        if proc.info['cmdline'] is None:
+            continue
+        cmd = ' '.join(proc.info['cmdline'])
+        if 'ssh' in cmd and '-L' in cmd:
+            ssh_processes.append(cmd)
+    
+    for i, cmd in enumerate(ssh_processes):
+        print(f"  Process {i+1}: {cmd}")
+    
+    print("\n=== END TUNNELS ===\n")
+
 def stop_all_server_tunnels():
     global server_tunnels
     for tunnel_key, (proc, _) in server_tunnels.items():
@@ -261,6 +403,7 @@ def start_main_tunnel():
 
 def stop_main_tunnel():
     stop_all_server_tunnels()
+    stop_winrm_tunnels()
 
 def get_libvirt_connection(server):
     """
@@ -520,6 +663,93 @@ async def shutdown_event():
 atexit.register(stop_main_tunnel)
 atexit.register(cleanup_video_tunnels)
 atexit.register(cleanup_tcp_proxies)
+
+# WinRM функции
+try:
+    import winrm
+except ImportError:
+    print("[WINRM] Warning: pywinrm not installed. Run: pip install pywinrm")
+    winrm = None
+
+def run_winrm_command(vm_ip, command, jump_host_info=None):
+    """Выполняет команду на ВМ через WinRM"""
+    if not winrm:
+        raise Exception("pywinrm not installed")
+    
+    try:
+        # Создаем туннель для WinRM
+        if jump_host_info:
+            local_port = start_winrm_tunnel(vm_ip, jump_host_info)
+            winrm_url = f"http://127.0.0.1:{local_port}/wsman"
+        else:
+            winrm_url = f"http://{vm_ip}:5985/wsman"
+        
+        session = winrm.Session(
+            winrm_url,
+            auth=('ggg', '123'),  # Учетные данные
+            transport='ntlm'
+        )
+        
+        result = session.run_cmd(command)
+        
+        return {
+            'success': result.status_code == 0,
+            'stdout': result.std_out.decode('cp866'),
+            'stderr': result.std_err.decode('cp866'),
+            'status_code': result.status_code
+        }
+        
+    except Exception as e:
+        return {
+            'success': False,
+            'stdout': '',
+            'stderr': str(e),
+            'status_code': 1
+        }
+
+def start_application_on_vm(vm_ip, app_path, jump_host_info=None):
+    """Запускает приложение на ВМ"""
+    # Проверяем, что приложение существует
+    check_cmd = f'dir {app_path.replace("/", "\\")}'
+    check_result = run_winrm_command(vm_ip, check_cmd, jump_host_info)
+    
+    if not check_result['success']:
+        print(f"[APP] Application not found at {app_path}")
+        return False
+    
+    print(f"[APP] Application found, starting...")
+    
+    # Запуск приложения через PowerShell
+    start_cmd = f'powershell -Command "Start-Process \'{app_path.replace("/", "\\")}\' -NoNewWindow"'
+    
+    result = run_winrm_command(vm_ip, start_cmd, jump_host_info)
+    
+    if result['success']:
+        print(f"[APP] Application started successfully on {vm_ip}")
+        return True
+    else:
+        print(f"[APP] Failed to start application: {result['stderr']}")
+        return False
+
+def wait_for_vm_ready(vm_ip, jump_host_info=None, timeout=300):
+    """Ожидает загрузки ВМ и доступности WinRM"""
+    import time
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        try:
+            # Пробуем выполнить простую команду
+            result = run_winrm_command(vm_ip, 'whoami', jump_host_info)
+            if result['success']:
+                print(f"[VM] VM {vm_ip} is ready")
+                return True
+        except Exception as e:
+            print(f"[VM] Waiting for {vm_ip} to be ready: {e}")
+        
+        time.sleep(10)
+    
+    print(f"[VM] Timeout waiting for {vm_ip} to be ready")
+    return False
 
 @app.post("/auth/register", response_model=UserResponse)
 def register(user: UserCreate, db: Session = Depends(get_db)):
@@ -840,6 +1070,124 @@ def start_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_c
     log = {"vm": request.vm_name, "action": "start", "status": status, "host": request.vm_host}
     return log
 
+@app.post("/vms/start-with-app")
+def start_vm_with_app(
+    vm_name: str = Query(...),
+    host: str = Query(...), 
+    port: int = Query(default=16509),
+    app_path: str = Query(default="C:\\CrystalServer\\CrystalCloudeServer.exe"),
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Запускает ВМ и автоматически запускает приложение"""
+    server = db.query(Server).filter(Server.host == host, Server.port == port).first()
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    # Получаем jump host информацию
+    jump_host_info = None
+    if server.jump_host:
+        jump_host_info = {
+            'host': server.jump_host.host,
+            'port': server.jump_host.port,
+            'user': server.jump_host.user
+        }
+    
+    # Запускаем ВМ
+    conn = get_libvirt_connection(server)
+    
+    try:
+        domain = conn.lookupByName(vm_name)
+        if domain is None:
+            raise HTTPException(status_code=404, detail="ВМ не найдена.")
+        
+        # Проверяем текущее состояние
+        state_code, _ = domain.state()
+        if state_code == libvirt.VIR_DOMAIN_RUNNING:
+            print(f"[VM] VM {vm_name} is already running")
+            vm_running = True
+        else:
+            domain.create()
+            vm_running = False
+            print(f"[VM] Starting VM {vm_name}...")
+        
+        conn.close()
+        
+        # Получаем IP ВМ (для примера используем IP из имени или конфигурации)
+        # В реальном коде нужно получить IP из DHCP или других источников
+        vm_ip = "172.20.1.196"  # Заменить на реальный IP ВМ
+        
+        if not vm_running:
+            # Ожидаем загрузки ВМ
+            print(f"[VM] Waiting for VM {vm_name} to boot...")
+            if not wait_for_vm_ready(vm_ip, jump_host_info, timeout=300):
+                raise HTTPException(status_code=500, detail="VM failed to boot within timeout")
+        
+        # Запускаем приложение
+        print(f"[APP] Starting application {app_path} on VM {vm_name}")
+        app_started = start_application_on_vm(vm_ip, app_path, jump_host_info)
+        
+        return {
+            "vm": vm_name,
+            "action": "start_with_app",
+            "vm_status": "running",
+            "app_started": app_started,
+            "app_path": app_path,
+            "vm_ip": vm_ip,
+            "host": host
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error: {e}")
+
+@app.post("/vms/start-app")
+def start_app_on_vm(
+    vm_ip: str = Query(...),
+    app_path: str = Query(default="C:\\CrystalServer\\CrystalCloudeServer.exe"),
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Запускает приложение на уже работающей ВМ"""
+    # Получаем информацию о jump host из конфигурации
+    jump_host_info = None
+    if "jump_host" in config:
+        jump_host_info = config["jump_host"]
+    
+    print(f"[APP] Starting application {app_path} on VM {vm_ip}")
+    app_started = start_application_on_vm(vm_ip, app_path, jump_host_info)
+    
+    return {
+        "vm_ip": vm_ip,
+        "app_started": app_started,
+        "app_path": app_path
+    }
+
+@app.get("/vms/test-winrm")
+def test_winrm_connection(
+    vm_ip: str = Query(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Тестирует WinRM подключение к ВМ"""
+    jump_host_info = None
+    if "jump_host" in config:
+        jump_host_info = config["jump_host"]
+    
+    try:
+        result = run_winrm_command(vm_ip, 'whoami', jump_host_info)
+        return {
+            "vm_ip": vm_ip,
+            "connection_success": result['success'],
+            "stdout": result['stdout'],
+            "stderr": result['stderr'],
+            "status_code": result['status_code']
+        }
+    except Exception as e:
+        return {
+            "vm_ip": vm_ip,
+            "connection_success": False,
+            "error": str(e)
+        }
+
 @app.post("/vms/stop")
 def stop_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     server = db.query(Server).filter(Server.host == request.host, Server.port == request.port).first()
@@ -1065,10 +1413,90 @@ def get_all_vm_assignments(
     assignments = db.query(UserVM).all()
     return assignments
 
-@app.get("/admin/users", response_model=List[UserResponse])
-def get_all_users(
-    current_user: User = Depends(get_current_admin_user),
-    db: Session = Depends(get_db)
-):
-    users = db.query(User).all()
-    return users
+@app.get("/admin/debug/tunnels")
+def debug_tunnels(current_user: User = Depends(get_current_admin_user)):
+    """Отладка: показывает все активные туннели"""
+    list_all_tunnels()
+    
+    # Собираем информацию для ответа
+    tunnel_info = {
+        "server_tunnels": {},
+        "winrm_tunnels": {},
+        "video_tunnels": {},
+        "system_ssh_processes": []
+    }
+    
+    # Server tunnels
+    for tunnel_key, (proc, port) in server_tunnels.items():
+        tunnel_info["server_tunnels"][tunnel_key] = {
+            "local_port": port,
+            "alive": (proc and proc.poll() is None)
+        }
+    
+    # WinRM tunnels
+    for tunnel_key, (proc, port) in winrm_tunnels.items():
+        tunnel_info["winrm_tunnels"][tunnel_key] = {
+            "local_port": port,
+            "alive": (proc and proc.poll() is None)
+        }
+    
+    # Video tunnels
+    for tunnel_key, (proc, port) in video_tunnels.items():
+        tunnel_info["video_tunnels"][tunnel_key] = {
+            "local_port": port,
+            "alive": (proc and proc.poll() is None)
+        }
+    
+    # System processes
+    for proc in psutil.process_iter(attrs=['cmdline']):
+        if proc.info['cmdline'] is None:
+            continue
+        cmd = ' '.join(proc.info['cmdline'])
+        if 'ssh' in cmd and '-L' in cmd:
+            tunnel_info["system_ssh_processes"].append(cmd)
+    
+    return tunnel_info
+
+@app.post("/admin/debug/cleanup-tunnels")
+def cleanup_dead_tunnels(current_user: User = Depends(get_current_admin_user)):
+    """Очищает мертвые туннели"""
+    cleaned = {
+        "server_tunnels": 0,
+        "winrm_tunnels": 0,
+        "video_tunnels": 0
+    }
+    
+    # Очистка server tunnels
+    dead_server_keys = []
+    for tunnel_key, (proc, port) in server_tunnels.items():
+        if not proc or proc.poll() is not None:
+            dead_server_keys.append(tunnel_key)
+    
+    for key in dead_server_keys:
+        del server_tunnels[key]
+        cleaned["server_tunnels"] += 1
+    
+    # Очистка winrm tunnels
+    dead_winrm_keys = []
+    for tunnel_key, (proc, port) in winrm_tunnels.items():
+        if not proc or proc.poll() is not None:
+            dead_winrm_keys.append(tunnel_key)
+    
+    for key in dead_winrm_keys:
+        del winrm_tunnels[key]
+        cleaned["winrm_tunnels"] += 1
+    
+    # Очистка video tunnels
+    dead_video_keys = []
+    for tunnel_key, (proc, port) in video_tunnels.items():
+        if not proc or proc.poll() is not None:
+            dead_video_keys.append(tunnel_key)
+    
+    for key in dead_video_keys:
+        del video_tunnels[key]
+        cleaned["video_tunnels"] += 1
+    
+    return {
+        "message": "Dead tunnels cleaned up",
+        "cleaned_count": cleaned
+    }
