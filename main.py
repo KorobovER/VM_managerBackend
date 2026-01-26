@@ -1071,6 +1071,35 @@ def start_vm_legacy(request: VMActionRequest, current_user: User = Depends(get_c
     log = {"vm": request.vm_name, "action": "start", "status": status, "host": request.vm_host}
     return log
 
+@app.post("/vms/debug")
+def debug_vm(
+    vm_ip: str = Query(...),
+    command: str = Query(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Временный эндпоинт для отладки"""
+    jump_host_info = None
+    if "jump_host" in config:
+        jump_host_info = config["jump_host"]
+    
+    try:
+        result = run_winrm_command(vm_ip, command, jump_host_info)
+        return {
+            "vm_ip": vm_ip,
+            "command": command,
+            "success": result['success'],
+            "stdout": result['stdout'],
+            "stderr": result['stderr'],
+            "status_code": result['status_code']
+        }
+    except Exception as e:
+        return {
+            "vm_ip": vm_ip,
+            "command": command,
+            "success": False,
+            "error": str(e)
+        }
+
 @app.post("/vms/start-app")
 def start_app_on_vm(
     vm_ip: str = Query(...),
