@@ -709,6 +709,13 @@ def run_winrm_command(vm_ip, command, jump_host_info=None):
 
 def start_application_on_vm(vm_ip, app_path, jump_host_info=None):
     """Запускает GUI приложение на ВМ через RDP сессию"""
+    # Ждем пока ВМ полностью загрузится
+    print(f"[APP] Waiting for VM {vm_ip} to be fully ready...")
+    ready = wait_for_vm_ready(vm_ip, jump_host_info, timeout=60)
+    if not ready:
+        print(f"[APP] VM {vm_ip} is not ready")
+        return False
+    
     # Проверяем, что приложение существует
     app_path_windows = app_path.replace("/", "\\")
     check_cmd = f'dir {app_path_windows}'
