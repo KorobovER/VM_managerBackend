@@ -708,7 +708,7 @@ def run_winrm_command(vm_ip, command, jump_host_info=None):
         }
 
 def start_application_on_vm(vm_ip, app_path, jump_host_info=None):
-    """Запускает приложение на ВМ через scheduled task"""
+    """Запускает GUI приложение на ВМ через RDP сессию"""
     # Проверяем, что приложение существует
     app_path_windows = app_path.replace("/", "\\")
     check_cmd = f'dir {app_path_windows}'
@@ -720,21 +720,31 @@ def start_application_on_vm(vm_ip, app_path, jump_host_info=None):
     
     print(f"[APP] Application found, starting...")
     
-    # Удаляем старую задачу если есть
-    cleanup_cmd = f'schtasks /delete /tn CrystalCloudServer /f'
-    run_winrm_command(vm_ip, cleanup_cmd, jump_host_info)
+    # Проверяем активные RDP сессии
+    session_cmd = 'query user'
+    session_result = run_winrm_command(vm_ip, session_cmd, jump_host_info)
     
-    # Создаем scheduled task для запуска приложения
-    create_cmd = f'schtasks /create /tn CrystalCloudServer /tr "{app_path_windows}" /sc onlogon /it /f'
-    create_result = run_winrm_command(vm_ip, create_cmd, jump_host_info)
+    if not session_result['success'] or 'ggg' not in session_result['stdout']:
+        print(f"[APP] No active RDP session found, creating scheduled task for auto-start")
+        
+        # Создаем scheduled task для автозапуска при RDP подключении
+        cleanup_cmd = f'schtasks /delete /tn CrystalCloudServer /f'
+        run_winrm_command(vm_ip, cleanup_cmd, jump_host_info)
+        
+        create_cmd = f'schtasks /create /tn CrystalCloudServer /tr "{app_path_windows}" /sc onlogon /it /f'
+        create_result = run_winrm_command(vm_ip, create_cmd, jump_host_info)
+        
+        if not create_result['success']:
+            print(f"[APP] Failed to create scheduled task: {create_result['stderr']}")
+            return False
+        
+        print(f"[APP] Scheduled task created. Application will start when RDP session is active.")
+        return True
     
-    if not create_result['success']:
-        print(f"[APP] Failed to create scheduled task: {create_result['stderr']}")
-        return False
-    
-    # Запускаем задачу
-    run_cmd = f'schtasks /run /tn CrystalCloudServer'
-    result = run_winrm_command(vm_ip, run_cmd, jump_host_info)
+    # Если есть активная RDP сессия, запускаем через PowerShell
+    print(f"[APP] Active RDP session found, starting application...")
+    start_cmd = f'powershell -Command "Start-Process -FilePath \'{app_path_windows}\' -WindowStyle Normal"'
+    result = run_winrm_command(vm_ip, start_cmd, jump_host_info)
     
     if result['success']:
         print(f"[APP] Application started successfully on {vm_ip}")
