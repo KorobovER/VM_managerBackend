@@ -708,7 +708,7 @@ def run_winrm_command(vm_ip, command, jump_host_info=None):
         }
 
 def start_application_on_vm(vm_ip, app_path, jump_host_info=None):
-    """Запускает приложение на ВМ"""
+    """Запускает приложение на ВМ через scheduled task"""
     # Проверяем, что приложение существует
     app_path_windows = app_path.replace("/", "\\")
     check_cmd = f'dir {app_path_windows}'
@@ -720,10 +720,21 @@ def start_application_on_vm(vm_ip, app_path, jump_host_info=None):
     
     print(f"[APP] Application found, starting...")
     
-    # Запуск приложения через PowerShell
-    start_cmd = f'powershell -Command "Start-Process -FilePath \'{app_path_windows}\'"'
+    # Удаляем старую задачу если есть
+    cleanup_cmd = f'schtasks /delete /tn CrystalCloudServer /f'
+    run_winrm_command(vm_ip, cleanup_cmd, jump_host_info)
     
-    result = run_winrm_command(vm_ip, start_cmd, jump_host_info)
+    # Создаем scheduled task для запуска приложения
+    create_cmd = f'schtasks /create /tn CrystalCloudServer /tr "{app_path_windows}" /sc onlogon /it /f'
+    create_result = run_winrm_command(vm_ip, create_cmd, jump_host_info)
+    
+    if not create_result['success']:
+        print(f"[APP] Failed to create scheduled task: {create_result['stderr']}")
+        return False
+    
+    # Запускаем задачу
+    run_cmd = f'schtasks /run /tn CrystalCloudServer'
+    result = run_winrm_command(vm_ip, run_cmd, jump_host_info)
     
     if result['success']:
         print(f"[APP] Application started successfully on {vm_ip}")
