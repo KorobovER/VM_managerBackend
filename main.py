@@ -709,13 +709,6 @@ def run_winrm_command(vm_ip, command, jump_host_info=None):
 
 def start_application_on_vm(vm_ip, app_path, jump_host_info=None):
     """Запускает GUI приложение на ВМ через RDP сессию"""
-    # Ждем пока ВМ полностью загрузится
-    print(f"[APP] Waiting for VM {vm_ip} to be fully ready...")
-    ready = wait_for_vm_ready(vm_ip, jump_host_info, timeout=60)
-    if not ready:
-        print(f"[APP] VM {vm_ip} is not ready")
-        return False
-    
     # Проверяем, что приложение существует
     app_path_windows = app_path.replace("/", "\\")
     check_cmd = f'dir {app_path_windows}'
@@ -1127,6 +1120,27 @@ def debug_vm(
             "success": False,
             "error": str(e)
         }
+
+@app.post("/vms/ready")
+def check_vm_ready(
+    vm_ip: str = Query(...),
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Проверяет готовность ВМ к выполнению команд"""
+    # Получаем информацию о jump host из конфигурации
+    jump_host_info = None
+    if "jump_host" in config:
+        jump_host_info = config["jump_host"]
+    
+    print(f"[VM] Checking readiness for VM {vm_ip}")
+    ready = wait_for_vm_ready(vm_ip, jump_host_info, timeout=60)
+    
+    return {
+        "vm_ip": vm_ip,
+        "ready": ready,
+        "message": "VM is ready" if ready else "VM is not ready or timeout"
+    }
 
 @app.post("/vms/start-app")
 def start_app_on_vm(
