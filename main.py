@@ -1269,35 +1269,25 @@ def start_rdp_proxy(
         # Создаем RDP туннель
         tunnel_port = create_video_tunnel(vm_ip, video_port=3389)
         
-        # Создаем Scheduled Task для запуска игры при логине
-        print(f"[RDP TUNNEL] Setting up Scheduled Task for game autostart: {game_path} {game_args}")
+        # Создаем батник в Startup папке для запуска игры при логине
+        print(f"[RDP TUNNEL] Setting up game autostart via Startup batch: {game_path} {game_args}")
         game_path_windows = game_path.replace("/", "\\")
         
-        # Удаляем старую задачу если существует
-        delete_task_cmd = 'schtasks /delete /tn "StartGameOnLogon" /f'
-        run_winrm_command(vm_ip, delete_task_cmd, jump_host_info)
+        # Создаем батник с командой запуска
+        batch_content = f'@echo off\r\ntimeout /t 3 /nobreak\r\nstart "" "{game_path_windows}" {game_args}'
         
-        # Создаем новую Scheduled Task
-        # /sc onlogon - запускается при логине
-        # /ru ggg - от пользователя ggg
-        # /rp 123 - пароль
-        # /it - интерактивный режим (может взаимодействовать с desktop)
-        # Экранируем кавычки правильно для schtasks
-        escaped_path = game_path_windows.replace('"', '\\"')
-        # Если есть параметры, добавляем их
-        if game_args:
-            task_action = f'\\"cmd\\" /c start \\"\\" \\"{escaped_path}\\" {game_args}'
-        else:
-            task_action = f'\\"cmd\\" /c start \\"\\" \\"{escaped_path}\\"'
+        # Создаем батник через PowerShell
+        create_batch_cmd = f'powershell.exe -NoProfile -Command "' \
+            f'$startupPath = [System.IO.Path]::Combine([Environment]::GetFolderPath(\'Startup\'), \'StartGame.bat\'); ' \
+            f'[System.IO.File]::WriteAllText($startupPath, @\'@echo off`r`ntimeout /t 3 /nobreak`r`nstart \"\" \"{game_path_windows}\" {game_args}\'@, [System.Text.Encoding]::ASCII); ' \
+            f'Write-Host \'Batch created at: \' $startupPath"'
         
-        create_task_cmd = f'schtasks /create /tn "StartGameOnLogon" /tr "{task_action}" /sc onlogon /ru ggg /rp 123 /it /f'
-        
-        result = run_winrm_command(vm_ip, create_task_cmd, jump_host_info)
-        print(f"[RDP TUNNEL] Scheduled Task creation result: {result['success']}")
+        result = run_winrm_command(vm_ip, create_batch_cmd, jump_host_info)
+        print(f"[RDP TUNNEL] Batch file creation result: {result['success']}")
         if not result['success']:
-            print(f"[RDP TUNNEL] Task creation error: {result['stderr']}")
+            print(f"[RDP TUNNEL] Batch creation error: {result['stderr']}")
         else:
-            print(f"[RDP TUNNEL] Task created successfully: {result['stdout']}")
+            print(f"[RDP TUNNEL] Batch created successfully: {result['stdout']}")
         
         return {
             "status": "tunnel_started",
