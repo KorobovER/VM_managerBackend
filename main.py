@@ -619,11 +619,8 @@ def start_tcp_proxy(vm_ip, video_port=55554, jump_host_info=None):
             print(f"[PROXY] Proxy already running for {proxy_key} on port {proxy_info['port']}")
             return proxy_info["port"]
     
-    # Если передан jump_host_info, используем его для создания туннеля
-    if jump_host_info:
-        ssh_tunnel_port = create_video_tunnel(vm_ip, video_port, jump_host_info)
-    else:
-        ssh_tunnel_port = create_video_tunnel(vm_ip, video_port)
+    # Создаем SSH туннель (jump_host_info используется из конфигурации)
+    ssh_tunnel_port = create_video_tunnel(vm_ip, video_port)
     print(f"[PROXY] SSH tunnel created on port {ssh_tunnel_port}")
     
     local_tunnel_port = get_available_local_port(start_port=9002)
