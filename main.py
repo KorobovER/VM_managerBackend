@@ -1268,28 +1268,27 @@ def start_rdp_proxy(
         # Создаем RDP туннель
         tunnel_port = create_video_tunnel(vm_ip, video_port=3389)
         
-        # Настраиваем AutoLogon на ВМ (один раз)
+        # Настраиваем AutoLogon через reg add
         print(f"[RDP TUNNEL] Setting up AutoLogon for user ggg on {vm_ip}")
-        setup_autologon_cmd = """
-$regPath = 'HKLM:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon'
-Set-ItemProperty -Path $regPath -Name 'AutoAdminLogon' -Value '1'
-Set-ItemProperty -Path $regPath -Name 'DefaultUsername' -Value 'ggg'
-Set-ItemProperty -Path $regPath -Name 'DefaultPassword' -Value '123'
-Set-ItemProperty -Path $regPath -Name 'DefaultDomainName' -Value '.'
-"""
-        run_winrm_command(vm_ip, setup_autologon_cmd, jump_host_info)
+        setup_autologon_cmd = 'reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v AutoAdminLogon /t REG_SZ /d 1 /f && reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DefaultUsername /t REG_SZ /d ggg /f && reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DefaultPassword /t REG_SZ /d 123 /f && reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DefaultDomainName /t REG_SZ /d . /f'
+        result = run_winrm_command(vm_ip, setup_autologon_cmd, jump_host_info)
+        print(f"[RDP TUNNEL] AutoLogon setup result: {result['success']}")
+        if not result['success']:
+            print(f"[RDP TUNNEL] AutoLogon error: {result['stderr']}")
         
-        # Создаем скрипт автозапуска игры
+        # Создаем батник в Startup папке пользователя
         print(f"[RDP TUNNEL] Setting up game autostart: {game_path}")
         game_path_windows = game_path.replace("/", "\\")
-        startup_cmd = f"""
-$startupFolder = [System.IO.Path]::Combine([Environment]::GetFolderPath('Startup'), 'StartGame.bat')
-@'
-@echo off
-start "" "{game_path_windows}"
-'@ | Out-File -FilePath $startupFolder -Encoding ASCII
-"""
-        run_winrm_command(vm_ip, startup_cmd, jump_host_info)
+        
+        # Создаем батник через PowerShell (явно указываем powershell.exe)
+        startup_script = f'@echo off\r\ntimeout /t 2 /nobreak\r\nstart "" "{game_path_windows}"'
+        
+        create_batch_cmd = f'powershell.exe -Command "$batchPath = \'C:\\\\Users\\\\ggg\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\Startup\\\\StartGame.bat\'; [System.IO.File]::WriteAllText($batchPath, @\'@echo off`r`ntimeout /t 2 /nobreak`r`nstart \\"\\\" \\\"{game_path_windows}\\\"`r`n\'@, [System.Text.Encoding]::ASCII); Write-Host \'Batch file created\'"'
+        
+        result = run_winrm_command(vm_ip, create_batch_cmd, jump_host_info)
+        print(f"[RDP TUNNEL] Batch file creation result: {result['success']}")
+        if not result['success']:
+            print(f"[RDP TUNNEL] Batch creation error: {result['stderr']}")
         
         return {
             "status": "tunnel_started",
