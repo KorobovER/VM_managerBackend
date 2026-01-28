@@ -1280,10 +1280,8 @@ def start_rdp_proxy(
         print(f"[RDP TUNNEL] Setting up game autostart: {game_path}")
         game_path_windows = game_path.replace("/", "\\")
         
-        # Создаем батник через PowerShell (явно указываем powershell.exe)
-        startup_script = f'@echo off\r\ntimeout /t 2 /nobreak\r\nstart "" "{game_path_windows}"'
-        
-        create_batch_cmd = f'powershell.exe -Command "$batchPath = \'C:\\\\Users\\\\ggg\\\\AppData\\\\Roaming\\\\Microsoft\\\\Windows\\\\Start Menu\\\\Programs\\\\Startup\\\\StartGame.bat\'; [System.IO.File]::WriteAllText($batchPath, @\'@echo off`r`ntimeout /t 2 /nobreak`r`nstart \\"\\\" \\\"{game_path_windows}\\\"`r`n\'@, [System.Text.Encoding]::ASCII); Write-Host \'Batch file created\'"'
+        # Создаем батник через PowerShell (более простой синтаксис)
+        create_batch_cmd = f'powershell.exe -NoProfile -Command "mkdir -Force \'C:\\Users\\ggg\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\' | Out-Null; $content = \'@echo off`ntimeout /t 2 /nobreak`nstart \"\" \"{game_path_windows}\"\'; Set-Content -Path \'C:\\Users\\ggg\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\StartGame.bat\' -Value $content -Encoding ASCII; Write-Host \'Batch created\'"'
         
         result = run_winrm_command(vm_ip, create_batch_cmd, jump_host_info)
         print(f"[RDP TUNNEL] Batch file creation result: {result['success']}")
