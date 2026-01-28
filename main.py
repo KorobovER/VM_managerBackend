@@ -1268,25 +1268,27 @@ def start_rdp_proxy(
         # Создаем RDP туннель
         tunnel_port = create_video_tunnel(vm_ip, video_port=3389)
         
-        # Настраиваем AutoLogon через reg add
-        print(f"[RDP TUNNEL] Setting up AutoLogon for user ggg on {vm_ip}")
-        setup_autologon_cmd = 'reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v AutoAdminLogon /t REG_SZ /d 1 /f && reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DefaultUsername /t REG_SZ /d ggg /f && reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DefaultPassword /t REG_SZ /d 123 /f && reg add "HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v DefaultDomainName /t REG_SZ /d . /f'
-        result = run_winrm_command(vm_ip, setup_autologon_cmd, jump_host_info)
-        print(f"[RDP TUNNEL] AutoLogon setup result: {result['success']}")
-        if not result['success']:
-            print(f"[RDP TUNNEL] AutoLogon error: {result['stderr']}")
-        
-        # Создаем батник в Startup папке пользователя
-        print(f"[RDP TUNNEL] Setting up game autostart: {game_path}")
+        # Создаем Scheduled Task для запуска игры при логине
+        print(f"[RDP TUNNEL] Setting up Scheduled Task for game autostart: {game_path}")
         game_path_windows = game_path.replace("/", "\\")
         
-        # Создаем батник через PowerShell (более простой синтаксис)
-        create_batch_cmd = f'powershell.exe -NoProfile -Command "mkdir -Force \'C:\\Users\\ggg\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\' | Out-Null; $content = \'@echo off`ntimeout /t 2 /nobreak`nstart \"\" \"{game_path_windows}\"\'; Set-Content -Path \'C:\\Users\\ggg\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\StartGame.bat\' -Value $content -Encoding ASCII; Write-Host \'Batch created\'"'
+        # Удаляем старую задачу если существует
+        delete_task_cmd = 'schtasks /delete /tn "StartGameOnLogon" /f'
+        run_winrm_command(vm_ip, delete_task_cmd, jump_host_info)
         
-        result = run_winrm_command(vm_ip, create_batch_cmd, jump_host_info)
-        print(f"[RDP TUNNEL] Batch file creation result: {result['success']}")
+        # Создаем новую Scheduled Task
+        # /sc onlogon - запускается при логине
+        # /ru ggg - от пользователя ggg
+        # /rp 123 - пароль
+        # /it - интерактивный режим (может взаимодействовать с desktop)
+        create_task_cmd = f'schtasks /create /tn "StartGameOnLogon" /tr "cmd /c start \"\" \"{game_path_windows}\"" /sc onlogon /ru ggg /rp 123 /it /f'
+        
+        result = run_winrm_command(vm_ip, create_task_cmd, jump_host_info)
+        print(f"[RDP TUNNEL] Scheduled Task creation result: {result['success']}")
         if not result['success']:
-            print(f"[RDP TUNNEL] Batch creation error: {result['stderr']}")
+            print(f"[RDP TUNNEL] Task creation error: {result['stderr']}")
+        else:
+            print(f"[RDP TUNNEL] Task created successfully: {result['stdout']}")
         
         return {
             "status": "tunnel_started",
@@ -1295,7 +1297,7 @@ def start_rdp_proxy(
             "tunnel_host": "127.0.0.1",
             "game_path": game_path,
             "rdp_command": f"mstsc /v:127.0.0.1:{tunnel_port}",
-            "message": f"RDP tunnel ready. AutoLogon enabled. Game will start on login. Connect with: mstsc /v:127.0.0.1:{tunnel_port}"
+            "message": f"RDP tunnel ready. Game will start on login. Connect with: mstsc /v:127.0.0.1:{tunnel_port}"
         }
     except Exception as e:
         print(f"[RDP TUNNEL] Failed to start tunnel: {e}")
