@@ -1250,8 +1250,8 @@ if (Test-Path $folder) {{
 @app.post("/proxy/rdp/start")
 def start_rdp_proxy(
     vm_ip: str = Query(...),
-    game_path: str = Query(default="C:\\Program Files (x86)\\NVIDIA Corporation\\NVIDIA Demos\\G-SYNC\\bin32\\DemoLauncher.exe"),
-    game_args: str = Query(default="rundemo"),
+    game_path: str = Query(default="C:\\Users\\ggg\\Desktop\\G-SYNC Pendulum Demo.lnk"),
+    game_args: str = Query(default=""),
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
