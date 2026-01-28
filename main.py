@@ -1203,7 +1203,7 @@ def start_rdp_proxy(
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
-    """Запускает RDP прокси-сервер для подключения к ВМ через mstsc"""
+    """Запускает RDP туннель для подключения к ВМ через mstsc"""
     # Получаем информацию о jump host из конфигурации
     jump_host_info = None
     if "jump_host" in config:
@@ -1213,23 +1213,21 @@ def start_rdp_proxy(
         raise HTTPException(status_code=400, detail="Jump host not configured")
     
     try:
-        print(f"[RDP PROXY] Starting RDP proxy for {vm_ip}")
-        proxy_port = start_tcp_proxy(vm_ip, video_port=3389, jump_host_info=jump_host_info)
-        
-        # Получаем внешний адрес из конфигурации или используем jump host
-        external_host = config.get("external_host", jump_host_info.get("host", "localhost"))
+        print(f"[RDP TUNNEL] Starting RDP tunnel for {vm_ip}")
+        # Используем существующую функцию создания видео туннеля для RDP
+        tunnel_port = create_video_tunnel(vm_ip, video_port=3389)
         
         return {
-            "status": "proxy_started",
+            "status": "tunnel_started",
             "vm_ip": vm_ip,
-            "proxy_port": proxy_port,
-            "connection_address": f"{external_host}",
-            "rdp_command": f"mstsc /v:{external_host}:{proxy_port}",
-            "message": f"RDP proxy started. Use command: mstsc /v:{external_host}:{proxy_port}"
+            "tunnel_port": tunnel_port,
+            "tunnel_host": "127.0.0.1",
+            "rdp_command": f"mstsc /v:127.0.0.1:{tunnel_port}",
+            "message": f"RDP tunnel started on localhost:{tunnel_port}. Use command: mstsc /v:127.0.0.1:{tunnel_port}"
         }
     except Exception as e:
-        print(f"[RDP PROXY] Failed to start proxy: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start RDP proxy: {str(e)}")
+        print(f"[RDP TUNNEL] Failed to start tunnel: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start RDP tunnel: {str(e)}")
 
 @app.post("/proxy/rdp/stop")
 def stop_rdp_proxy(
