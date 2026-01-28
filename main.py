@@ -1281,7 +1281,9 @@ def start_rdp_proxy(
         # /ru ggg - от пользователя ggg
         # /rp 123 - пароль
         # /it - интерактивный режим (может взаимодействовать с desktop)
-        create_task_cmd = f'schtasks /create /tn "StartGameOnLogon" /tr "cmd /c start \"\" \"{game_path_windows}\"" /sc onlogon /ru ggg /rp 123 /it /f'
+        # Экранируем кавычки правильно для schtasks
+        escaped_path = game_path_windows.replace('"', '\\"')
+        create_task_cmd = f'schtasks /create /tn "StartGameOnLogon" /tr "\\"cmd\\" /c start \\"\\" \\"{escaped_path}\\"" /sc onlogon /ru ggg /rp 123 /it /f'
         
         result = run_winrm_command(vm_ip, create_task_cmd, jump_host_info)
         print(f"[RDP TUNNEL] Scheduled Task creation result: {result['success']}")
