@@ -1273,21 +1273,27 @@ def start_rdp_proxy(
         print(f"[RDP TUNNEL] Setting up game autostart via Startup batch: {game_path} {game_args}")
         game_path_windows = game_path.replace("/", "\\")
         
-        # Создаем батник с командой запуска
-        batch_content = f'@echo off\r\ntimeout /t 3 /nobreak\r\nstart "" "{game_path_windows}" {game_args}'
+        # Создаем батник через cmd.exe
+        # Используем echo для создания содержимого батника
+        startup_batch_path = '%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\StartGame.bat'
         
-        # Создаем батник через PowerShell
-        create_batch_cmd = f'powershell.exe -NoProfile -Command "' \
-            f'$startupPath = [System.IO.Path]::Combine([Environment]::GetFolderPath(\'Startup\'), \'StartGame.bat\'); ' \
-            f'[System.IO.File]::WriteAllText($startupPath, @\'@echo off`r`ntimeout /t 3 /nobreak`r`nstart \"\" \"{game_path_windows}\" {game_args}\'@, [System.Text.Encoding]::ASCII); ' \
-            f'Write-Host \'Batch created at: \' $startupPath"'
+        # Команда создает батник с правильным содержимым
+        # Обязательно обворачиваем в cmd /c чтобы WinRM выполнил через cmd.exe, а не PowerShell
+        create_batch_cmd = f'cmd /c (echo @echo off & echo timeout /t 3 /nobreak & echo start "" "{game_path_windows}" {game_args}) > "{startup_batch_path}"'
         
         result = run_winrm_command(vm_ip, create_batch_cmd, jump_host_info)
         print(f"[RDP TUNNEL] Batch file creation result: {result['success']}")
         if not result['success']:
             print(f"[RDP TUNNEL] Batch creation error: {result['stderr']}")
         else:
-            print(f"[RDP TUNNEL] Batch created successfully: {result['stdout']}")
+            print(f"[RDP TUNNEL] Batch created successfully")
+            
+        # Проверяем, что батник создался
+        check_batch_cmd = f'cmd /c dir "{startup_batch_path}"'
+        check_result = run_winrm_command(vm_ip, check_batch_cmd, jump_host_info)
+        print(f"[RDP TUNNEL] Batch file check: {check_result['success']}")
+        if check_result['success']:
+            print(f"[RDP TUNNEL] Batch file exists")
         
         return {
             "status": "tunnel_started",
