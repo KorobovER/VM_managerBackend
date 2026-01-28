@@ -608,7 +608,7 @@ def tcp_relay_handler(client_socket, remote_host, remote_port, vm_ip, proxy_port
             pass
         print(f"[PROXY {vm_ip}:{proxy_port}] Client disconnected from {client_addr}")
 
-def start_tcp_proxy(vm_ip, video_port=55554):
+def start_tcp_proxy(vm_ip, video_port=55554, jump_host_info=None):
     global tcp_proxies, proxy_threads
     
     proxy_key = f"{vm_ip}:{video_port}"
@@ -619,7 +619,11 @@ def start_tcp_proxy(vm_ip, video_port=55554):
             print(f"[PROXY] Proxy already running for {proxy_key} on port {proxy_info['port']}")
             return proxy_info["port"]
     
-    ssh_tunnel_port = create_video_tunnel(vm_ip, video_port)
+    # Если передан jump_host_info, используем его для создания туннеля
+    if jump_host_info:
+        ssh_tunnel_port = create_video_tunnel(vm_ip, video_port, jump_host_info)
+    else:
+        ssh_tunnel_port = create_video_tunnel(vm_ip, video_port)
     print(f"[PROXY] SSH tunnel created on port {ssh_tunnel_port}")
     
     local_tunnel_port = get_available_local_port(start_port=9002)
@@ -1213,7 +1217,7 @@ def start_rdp_proxy(
     
     try:
         print(f"[RDP PROXY] Starting RDP proxy for {vm_ip}")
-        proxy_port = start_tcp_proxy(vm_ip, video_port=3389)
+        proxy_port = start_tcp_proxy(vm_ip, video_port=3389, jump_host_info=jump_host_info)
         
         # Получаем внешний адрес из конфигурации или используем jump host
         external_host = config.get("external_host", jump_host_info.get("host", "localhost"))
