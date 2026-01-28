@@ -1197,14 +1197,14 @@ def check_vm_ready(
         "message": "VM is ready" if ready else "VM is not ready or timeout"
     }
 
-@app.post("/proxy/rdp/start")
-def start_rdp_proxy(
+@app.get("/proxy/rdp/games")
+def get_available_games(
     vm_ip: str = Query(...),
+    games_folder: str = Query(default="C:\\Games"),
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
-    """Запускает RDP туннель для подключения к ВМ через mstsc"""
-    # Получаем информацию о jump host из конфигурации
+    """Получает список доступных игр на ВМ"""
     jump_host_info = None
     if "jump_host" in config:
         jump_host_info = config["jump_host"]
@@ -1213,17 +1213,92 @@ def start_rdp_proxy(
         raise HTTPException(status_code=400, detail="Jump host not configured")
     
     try:
-        print(f"[RDP TUNNEL] Starting RDP tunnel for {vm_ip}")
-        # Используем существующую функцию создания видео туннеля для RDP
+        print(f"[GAMES] Scanning games folder on {vm_ip}: {games_folder}")
+        
+        # Сканируем папку с играми
+        games_folder_windows = games_folder.replace("/", "\\")
+        scan_cmd = f"""
+$folder = '{games_folder_windows}'
+if (Test-Path $folder) {{
+    Get-ChildItem -Path $folder -Filter '*.exe' -Recurse | Select-Object -ExpandProperty FullName
+}} else {{
+    Write-Host "Folder not found"
+}}
+"""
+        result = run_winrm_command(vm_ip, scan_cmd, jump_host_info)
+        
+        if result['success']:
+            games = [line.strip() for line in result['stdout'].split('\n') if line.strip() and line.endswith('.exe')]
+            return {
+                "vm_ip": vm_ip,
+                "games_folder": games_folder,
+                "games": games,
+                "count": len(games)
+            }
+        else:
+            return {
+                "vm_ip": vm_ip,
+                "games_folder": games_folder,
+                "games": [],
+                "count": 0,
+                "error": result['stderr']
+            }
+    except Exception as e:
+        print(f"[GAMES] Failed to scan games: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to scan games: {str(e)}")
+
+@app.post("/proxy/rdp/start")
+def start_rdp_proxy(
+    vm_ip: str = Query(...),
+    game_path: str = Query(default="C:\\Users\\ggg\\Desktop\\G-SYNC Pendulum Demo.exe"),
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Запускает RDP туннель с автоматическим логином и запуском игры"""
+    jump_host_info = None
+    if "jump_host" in config:
+        jump_host_info = config["jump_host"]
+    
+    if not jump_host_info:
+        raise HTTPException(status_code=400, detail="Jump host not configured")
+    
+    try:
+        print(f"[RDP TUNNEL] Starting RDP tunnel for {vm_ip}, game_path: {game_path}")
+        
+        # Создаем RDP туннель
         tunnel_port = create_video_tunnel(vm_ip, video_port=3389)
+        
+        # Настраиваем AutoLogon на ВМ (один раз)
+        print(f"[RDP TUNNEL] Setting up AutoLogon for user ggg on {vm_ip}")
+        setup_autologon_cmd = """
+$regPath = 'HKLM:\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon'
+Set-ItemProperty -Path $regPath -Name 'AutoAdminLogon' -Value '1'
+Set-ItemProperty -Path $regPath -Name 'DefaultUsername' -Value 'ggg'
+Set-ItemProperty -Path $regPath -Name 'DefaultPassword' -Value '123'
+Set-ItemProperty -Path $regPath -Name 'DefaultDomainName' -Value '.'
+"""
+        run_winrm_command(vm_ip, setup_autologon_cmd, jump_host_info)
+        
+        # Создаем скрипт автозапуска игры
+        print(f"[RDP TUNNEL] Setting up game autostart: {game_path}")
+        game_path_windows = game_path.replace("/", "\\")
+        startup_cmd = f"""
+$startupFolder = [System.IO.Path]::Combine([Environment]::GetFolderPath('Startup'), 'StartGame.bat')
+@'
+@echo off
+start "" "{game_path_windows}"
+'@ | Out-File -FilePath $startupFolder -Encoding ASCII
+"""
+        run_winrm_command(vm_ip, startup_cmd, jump_host_info)
         
         return {
             "status": "tunnel_started",
             "vm_ip": vm_ip,
             "tunnel_port": tunnel_port,
             "tunnel_host": "127.0.0.1",
+            "game_path": game_path,
             "rdp_command": f"mstsc /v:127.0.0.1:{tunnel_port}",
-            "message": f"RDP tunnel started on localhost:{tunnel_port}. Use command: mstsc /v:127.0.0.1:{tunnel_port}"
+            "message": f"RDP tunnel ready. AutoLogon enabled. Game will start on login. Connect with: mstsc /v:127.0.0.1:{tunnel_port}"
         }
     except Exception as e:
         print(f"[RDP TUNNEL] Failed to start tunnel: {e}")
