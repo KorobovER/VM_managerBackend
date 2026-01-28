@@ -1250,7 +1250,8 @@ if (Test-Path $folder) {{
 @app.post("/proxy/rdp/start")
 def start_rdp_proxy(
     vm_ip: str = Query(...),
-    game_path: str = Query(default="C:\\Users\\ggg\\Desktop\\G-SYNC Pendulum Demo.exe"),
+    game_path: str = Query(default="C:\\Program Files (x86)\\NVIDIA Corporation\\NVIDIA Demos\\G-SYNC\\bin32\\DemoLauncher.exe"),
+    game_args: str = Query(default="rundemo"),
     current_user: User = Depends(get_current_user), 
     db: Session = Depends(get_db)
 ):
@@ -1269,7 +1270,7 @@ def start_rdp_proxy(
         tunnel_port = create_video_tunnel(vm_ip, video_port=3389)
         
         # Создаем Scheduled Task для запуска игры при логине
-        print(f"[RDP TUNNEL] Setting up Scheduled Task for game autostart: {game_path}")
+        print(f"[RDP TUNNEL] Setting up Scheduled Task for game autostart: {game_path} {game_args}")
         game_path_windows = game_path.replace("/", "\\")
         
         # Удаляем старую задачу если существует
@@ -1283,7 +1284,13 @@ def start_rdp_proxy(
         # /it - интерактивный режим (может взаимодействовать с desktop)
         # Экранируем кавычки правильно для schtasks
         escaped_path = game_path_windows.replace('"', '\\"')
-        create_task_cmd = f'schtasks /create /tn "StartGameOnLogon" /tr "\\"cmd\\" /c start \\"\\" \\"{escaped_path}\\"" /sc onlogon /ru ggg /rp 123 /it /f'
+        # Если есть параметры, добавляем их
+        if game_args:
+            task_action = f'\\"cmd\\" /c start \\"\\" \\"{escaped_path}\\" {game_args}'
+        else:
+            task_action = f'\\"cmd\\" /c start \\"\\" \\"{escaped_path}\\"'
+        
+        create_task_cmd = f'schtasks /create /tn "StartGameOnLogon" /tr "{task_action}" /sc onlogon /ru ggg /rp 123 /it /f'
         
         result = run_winrm_command(vm_ip, create_task_cmd, jump_host_info)
         print(f"[RDP TUNNEL] Scheduled Task creation result: {result['success']}")
