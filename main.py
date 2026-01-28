@@ -350,6 +350,60 @@ def stop_winrm_tunnels():
                 proc.kill()
     winrm_tunnels.clear()
 
+# RDP туннели
+rdp_tunnels = {}
+
+def start_rdp_tunnel(vm_ip, jump_host_info):
+    """Создает туннель для RDP (порт 3389)"""
+    global rdp_tunnels
+    
+    tunnel_key = f"rdp_{vm_ip}"
+    
+    # Проверяем, есть ли уже активный туннель в нашем кеше
+    if tunnel_key in rdp_tunnels:
+        proc, local_port = rdp_tunnels[tunnel_key]
+        if proc and proc.poll() is None:
+            print(f"[RDP] Using cached tunnel for {vm_ip}: localhost:{local_port}")
+            return local_port
+        else:
+            print(f"[RDP] Cached tunnel for {vm_ip} is dead, removing...")
+            del rdp_tunnels[tunnel_key]
+    
+    # Создаем новый туннель
+    local_port = 13389  # Базовый порт для RDP
+    
+    print(f"[RDP] Creating new tunnel for {vm_ip}: localhost:{local_port} -> {vm_ip}:3389")
+    
+    cmd = [
+        "ssh",
+        "-o", "StrictHostKeyChecking=no",
+        "-N", "-L", f"{local_port}:{vm_ip}:3389",
+        f"{jump_host_info['user']}@{jump_host_info['host']}", "-p", str(jump_host_info['port'])
+    ]
+    
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    time.sleep(2)
+    
+    if proc.poll() is not None:
+        stderr = proc.stderr.read().decode() if proc.stderr else ""
+        raise Exception(f"SSH RDP tunnel for {vm_ip} failed: {stderr}")
+    
+    rdp_tunnels[tunnel_key] = (proc, local_port)
+    print(f"[RDP] Successfully created tunnel for {vm_ip}: localhost:{local_port}")
+    return local_port
+
+def stop_rdp_tunnels():
+    """Останавливает все RDP туннели"""
+    global rdp_tunnels
+    for tunnel_key, (proc, _) in rdp_tunnels.items():
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+    rdp_tunnels.clear()
+
 def list_all_tunnels():
     """Отладочная функция: показывает все активные туннели"""
     print("\n=== ACTIVE TUNNELS ===")
@@ -1141,6 +1195,60 @@ def check_vm_ready(
         "ready": ready,
         "message": "VM is ready" if ready else "VM is not ready or timeout"
     }
+
+@app.post("/proxy/rdp/start")
+def start_rdp_proxy(
+    vm_ip: str = Query(...),
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Запускает RDP прокси-сервер для подключения к ВМ через mstsc"""
+    # Получаем информацию о jump host из конфигурации
+    jump_host_info = None
+    if "jump_host" in config:
+        jump_host_info = config["jump_host"]
+    
+    if not jump_host_info:
+        raise HTTPException(status_code=400, detail="Jump host not configured")
+    
+    try:
+        print(f"[RDP PROXY] Starting RDP proxy for {vm_ip}")
+        proxy_port = start_tcp_proxy(vm_ip, video_port=3389)
+        
+        # Получаем внешний адрес из конфигурации или используем jump host
+        external_host = config.get("external_host", jump_host_info.get("host", "localhost"))
+        
+        return {
+            "status": "proxy_started",
+            "vm_ip": vm_ip,
+            "proxy_port": proxy_port,
+            "connection_address": f"{external_host}",
+            "rdp_command": f"mstsc /v:{external_host}:{proxy_port}",
+            "message": f"RDP proxy started. Use command: mstsc /v:{external_host}:{proxy_port}"
+        }
+    except Exception as e:
+        print(f"[RDP PROXY] Failed to start proxy: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start RDP proxy: {str(e)}")
+
+@app.post("/proxy/rdp/stop")
+def stop_rdp_proxy(
+    vm_ip: str = Query(...),
+    current_user: User = Depends(get_current_user), 
+    db: Session = Depends(get_db)
+):
+    """Останавливает RDP прокси-сервер"""
+    try:
+        print(f"[RDP PROXY] Stopping RDP proxy for {vm_ip}")
+        stopped = stop_tcp_proxy(vm_ip, video_port=3389)
+        
+        return {
+            "status": "proxy_stopped" if stopped else "proxy_not_found",
+            "vm_ip": vm_ip,
+            "message": "RDP proxy stopped" if stopped else "RDP proxy was not running"
+        }
+    except Exception as e:
+        print(f"[RDP PROXY] Failed to stop proxy: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to stop RDP proxy: {str(e)}")
 
 @app.post("/vms/start-app")
 def start_app_on_vm(
