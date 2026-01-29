@@ -12,5 +12,6 @@
         "user": "gate",
         "password": ""
     },
-    "local_tunnel_port": 14444
+    "local_tunnel_port": 14444,
+    "server_address": "sinthy.fvds.ru"
 }

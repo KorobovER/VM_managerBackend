@@ -1305,14 +1305,15 @@ def start_rdp_proxy(
         if check_result['success']:
             print(f"[RDP TUNNEL] Batch file exists")
         
+        server_address = config.get("server_address", "127.0.0.1")
         return {
             "status": "tunnel_started",
             "vm_ip": vm_ip,
             "tunnel_port": tunnel_port,
-            "tunnel_host": "127.0.0.1",
+            "tunnel_host": server_address,
             "game_path": game_path,
-            "rdp_command": f"mstsc /v:127.0.0.1:{tunnel_port}",
-            "message": f"RDP tunnel ready. Game will start on login. Connect with: mstsc /v:127.0.0.1:{tunnel_port}"
+            "rdp_command": f"mstsc /v:{server_address}:{tunnel_port}",
+            "message": f"RDP tunnel ready. Game will start on login. Connect with: mstsc /v:{server_address}:{tunnel_port}"
         }
     except Exception as e:
         print(f"[RDP TUNNEL] Failed to start tunnel: {e}")
