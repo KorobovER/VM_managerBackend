@@ -510,8 +510,10 @@ def create_video_tunnel(vm_ip, video_port=55554):
     if tunnel_key in video_tunnels:
         proc, local_port = video_tunnels[tunnel_key]
         if proc.poll() is None:
+            print(f"[SSH TUNNEL] Using cached tunnel for {tunnel_key} on port {local_port}")
             return local_port
         else:
+            print(f"[SSH TUNNEL] Cached tunnel for {tunnel_key} is dead, removing...")
             del video_tunnels[tunnel_key]
     
     local_port = get_available_local_port()
@@ -523,14 +525,20 @@ def create_video_tunnel(vm_ip, video_port=55554):
         f"{jump['user']}@{jump['host']}", "-p", str(jump['port'])
     ]
     
+    print(f"[SSH TUNNEL] Creating SSH tunnel: {' '.join(cmd)}")
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     time.sleep(2)
     
     if proc.poll() is not None:
         stderr = proc.stderr.read().decode() if proc.stderr else ""
+        stdout = proc.stdout.read().decode() if proc.stdout else ""
+        print(f"[SSH TUNNEL] SSH tunnel process exited immediately!")
+        print(f"[SSH TUNNEL] STDERR: {stderr}")
+        print(f"[SSH TUNNEL] STDOUT: {stdout}")
         raise Exception(f"SSH tunnel failed: {stderr}")
     
     video_tunnels[tunnel_key] = (proc, local_port)
+    print(f"[SSH TUNNEL] SSH tunnel created successfully on port {local_port} for {tunnel_key}")
     return local_port
 
 def cleanup_video_tunnels():
@@ -554,8 +562,9 @@ def tcp_relay_handler(client_socket, remote_host, remote_port, vm_ip, proxy_port
     try:
         remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         remote_socket.settimeout(5)
+        print(f"[PROXY {vm_ip}:{proxy_port}] Attempting to connect to {remote_host}:{remote_port}")
         remote_socket.connect((remote_host, remote_port))
-        print(f"[PROXY {vm_ip}:{proxy_port}] Connected to {remote_host}:{remote_port}")
+        print(f"[PROXY {vm_ip}:{proxy_port}] Successfully connected to {remote_host}:{remote_port}")
         
         client_socket.setblocking(False)
         remote_socket.setblocking(False)
