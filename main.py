@@ -1266,8 +1266,8 @@ def start_rdp_proxy(
     try:
         print(f"[RDP TUNNEL] Starting RDP tunnel for {vm_ip}, game_path: {game_path}")
         
-        # Создаем RDP туннель
-        tunnel_port = create_video_tunnel(vm_ip, video_port=3389)
+        # Создаем RDP туннель с TCP прокси
+        tunnel_port = start_tcp_proxy(vm_ip, video_port=3389, jump_host_info=jump_host_info)
         
         # Создаем батник в Startup папке для запуска игры при логине
         print(f"[RDP TUNNEL] Setting up game autostart via Startup batch: {game_path} {game_args}")
