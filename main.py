@@ -643,12 +643,13 @@ def start_tcp_proxy(vm_ip, video_port=55554, jump_host_info=None):
     
     def proxy_listener():
         print(f"[PROXY] Listener started for {proxy_key} on port {local_tunnel_port}")
+        print(f"[PROXY] Proxy socket listening on 0.0.0.0:{local_tunnel_port}")
         try:
             while tcp_proxies.get(proxy_key, {}).get("active", False):
                 try:
                     proxy_socket.settimeout(1)
                     client_socket, client_addr = proxy_socket.accept()
-                    print(f"[PROXY] Accepted connection from {client_addr}")
+                    print(f"[PROXY] Accepted connection from {client_addr} to {proxy_key}")
                     
                     handler_thread = threading.Thread(
                         target=tcp_relay_handler,
