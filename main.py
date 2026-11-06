@@ -7,7 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 import psutil
 import time
-import libvirt
+try:
+    import libvirt
+except ImportError:
+    print("[LIBVIRT] Warning: libvirt-python not installed, VM management is disabled")
+    libvirt = None
 import os
 import shutil
 import atexit

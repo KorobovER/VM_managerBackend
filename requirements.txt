@@ -4,6 +4,9 @@ pyyaml
 libvirt-python
 sqlalchemy
 psycopg2-binary
+psycopg[binary]
+psutil
+email-validator
 alembic
 python-jose[cryptography]
 passlib[bcrypt]

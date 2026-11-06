@@ -16,9 +16,10 @@ def load_db_config():
     database = db_config["db"]
     return "postgresql://{}:{}@{}:{}/{}".format(user, password, host, port, database)
 
-DATABASE_URL = load_db_config()
+DATABASE_URL = os.getenv("DATABASE_URL") or load_db_config()
 
-engine = create_engine(DATABASE_URL)
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
