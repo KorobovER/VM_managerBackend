@@ -1,68 +1,24 @@
+# VM Manager — платформа управления облачными виртуальными машинами
 
-# Backend (FastAPI, KVM-only)
+Fullstack-система для предоставления и удалённого управления виртуальными машинами на базе KVM. Проект объединяет серверную инфраструктуру виртуализации, API управления ресурсами и пользовательский веб-интерфейс.
 
-CloudGaming Backend — это FastAPI приложение для управления виртуальными машинами через libvirt с поддержкой SSH туннелей и видео потоков.
+### Основные возможности
 
-## Предварительные требования
+- Управление виртуальными машинами через KVM/libvirt.
+- Подключение к удалённым серверам через SSH-туннели и Jump Host.
+- Управление виртуальной инфраструктурой через REST API.
+- Авторизация пользователей и разграничение прав доступа.
+- Мониторинг доступности серверов.
+- Интеграция с механизмами удалённого подключения и передачи видеопотока.
 
-### Системные зависимости
-- Python 3.8+
-- PostgreSQL (для базы данных)
-- SSH клиент
-- sshpass (для аутентификации по паролю)
+### Технологический стек
 
-На Linux:
-```bash
-sudo apt-get update
-sudo apt-get install -y python3-pip postgresql postgresql-contrib sshpass libvirt-dev
-```
+**Backend:** Python, FastAPI, PostgreSQL, SQLAlchemy, Alembic, libvirt, JWT.
 
-## Установка
+**Frontend:** Vue 3, Quasar, JavaScript, Axios.
 
-### 1. Клонирование репозитория
-```bash
-git clone <repository-url>
-cd backend
-```
+**Инфраструктура:** KVM, SSH, Linux, Docker
 
-### 2. Создание виртуального окружения
-```bash
-python3 -m venv venv
-source venv/bin/activate  # На Windows: venv\Scripts\activate
-```
+### Мой вклад
 
-### 3. Установка зависимостей Python
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Настройка базы данных PostgreSQL
-```bash
-# Создание пользователя и базы данных
-sudo -u postgres psql
-CREATE USER cloudgaming WITH PASSWORD 'your_password';
-CREATE DATABASE cloudgaming_db OWNER cloudgaming;
-ALTER ROLE cloudgaming SET client_encoding TO 'utf8';
-ALTER ROLE cloudgaming SET default_transaction_isolation TO 'read committed';
-ALTER ROLE cloudgaming SET default_transaction_deferrable TO on;
-ALTER ROLE cloudgaming SET default_transaction_read_committed TO on;
-GRANT ALL PRIVILEGES ON DATABASE cloudgaming_db TO cloudgaming;
-\q
-```
-
-
-### 5. Инициализация базы данных
-```bash
-python init_db.py
-```
-
-Это создаст все необходимые таблицы и схемы.
-
-## Запуск приложения
-
-### Разработка
-```bash
-uvicorn main:app --host 0.0.0.0 --port 9920 --reload
-```
-
-
+Самостоятельно спроектировал и реализовал backend и frontend приложения: разработал API и серверную бизнес-логику, интеграцию с гипервизором KVM через libvirt, механизмы подключения к удалённым серверам, авторизацию и пользовательский веб-интерфейс.
